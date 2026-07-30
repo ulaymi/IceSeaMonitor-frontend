@@ -3,7 +3,8 @@
 Публичная статическая демонстрация интерфейса IceSeaMonitor для поиска
 спутниковых сцен и мониторинга морского льда.
 
-Сайт: <https://ulaymi.github.io/IceSeaMonitor-frontend/>
+**Открыть сайт:**
+[ulaymi.github.io/IceSeaMonitor-frontend](https://ulaymi.github.io/IceSeaMonitor-frontend/)
 
 ## Ограничение
 
