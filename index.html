@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta id="themeColor" name="theme-color" content="#ffffff" />
+    <meta name="ice-api-base" content="" />
+    <meta
+      name="description"
+      content="IceSeaMonitor — мониторинг морского льда по данным Sentinel-1 и Sentinel-2"
+    />
+
+    <title>IceSeaMonitor · МТС</title>
+
+    <script>
+      (() => {
+        try {
+          const savedTheme = localStorage.getItem("iceSeaMonitor.theme");
+          const preferredTheme =
+            savedTheme === "light" || savedTheme === "dark"
+              ? savedTheme
+              : window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light";
+          document.documentElement.dataset.theme = preferredTheme;
+        } catch {
+          document.documentElement.dataset.theme = "light";
+        }
+      })();
+    </script>
+
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+
+  <body>
+    <header class="app-header">
+      <div class="utility-bar">
+        <nav class="audience-nav" aria-label="Направления платформы">
+          <span class="audience-nav-active">Геоаналитика</span>
+          <span>Спутниковые данные</span>
+          <span>Арктический мониторинг</span>
+        </nav>
+
+        <div class="utility-meta">
+          <span>Баренцево море</span>
+          <span>EPSG:4326</span>
+        </div>
+      </div>
+
+      <div class="primary-nav">
+        <div class="brand">
+          <a class="mws-logo" href="./" aria-label="МТС — цифровая экосистема">
+            <img
+              src="assets/mts-eco-logo.svg"
+              alt="МТС — цифровая экосистема"
+            />
+          </a>
+
+          <div class="product-nameplate">
+            <h1>IceSeaMonitor</h1>
+            <p>Мониторинг морского льда</p>
+          </div>
+        </div>
+
+        <nav class="product-nav" aria-label="Разделы IceSeaMonitor">
+          <a href="#searchSection">Поиск</a>
+          <a href="#mapSection">Карта</a>
+          <a href="#resultsPanel">Сцены</a>
+          <a href="#processingPanel">Обработка</a>
+        </nav>
+
+        <div class="header-actions">
+          <div class="header-status">
+            <div class="status-item">
+              <span class="status-dot" id="serverDot"></span>
+              <span id="serverStatus">Проверка сервера…</span>
+            </div>
+
+            <span class="separator"></span>
+
+            <span id="credentialStatus">Проверка CDSE…</span>
+
+            <span class="separator"></span>
+
+            <span id="snapStatus">Проверка SNAP…</span>
+
+            <span class="separator"></span>
+
+            <span id="storageStatus">Проверка хранилища…</span>
+          </div>
+
+          <button
+            class="theme-toggle"
+            id="themeToggle"
+            type="button"
+            aria-label="Включить тёмную тему"
+            title="Включить тёмную тему"
+          >
+            <span
+              class="theme-toggle-icon"
+              id="themeToggleIcon"
+              aria-hidden="true"
+            >
+              ☾
+            </span>
+            <span id="themeToggleText">Тёмная тема</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="control-panel panel" id="searchSection">
+        <div class="panel-heading">
+          <div>
+            <span class="eyebrow">Параметры запроса</span>
+            <h2>Поиск снимков</h2>
+          </div>
+
+          <span class="step-badge">MVP · 01</span>
+        </div>
+
+        <form id="searchForm">
+          <label class="field">
+            <span>Источник данных</span>
+
+            <select id="collection" name="collection">
+              <option value="sentinel-1-grd">
+                Sentinel-1 GRD · радиолокация
+              </option>
+              <option value="sentinel-2-l2a">
+                Sentinel-2 L2A · оптика
+              </option>
+            </select>
+
+            <small id="sourceHint">
+              Основной источник: работает ночью и через облачность.
+            </small>
+          </label>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>Дата начала</span>
+              <input id="dateFrom" name="dateFrom" type="date" required />
+            </label>
+
+            <label class="field">
+              <span>Дата окончания</span>
+              <input id="dateTo" name="dateTo" type="date" required />
+            </label>
+          </div>
+
+          <div class="field-grid">
+            <label class="field" id="cloudField">
+              <span>Облачность, не более</span>
+
+              <div class="input-suffix">
+                <input
+                  id="cloudCover"
+                  name="cloudCover"
+                  type="number"
+                  value="30"
+                  min="0"
+                  max="100"
+                  step="1"
+                  disabled
+                />
+                <span>%</span>
+              </div>
+            </label>
+
+            <label class="field">
+              <span>Число результатов</span>
+
+              <select id="resultLimit" name="resultLimit">
+                <option value="10">10</option>
+                <option value="30" selected>30</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="region-block">
+            <div class="region-heading">
+              <div>
+                <span class="field-title">Регион мониторинга</span>
+                <small id="regionStatus">Баренцево море · EPSG:4326</small>
+              </div>
+
+              <span class="region-ready" id="regionReady">
+                Полигон задан
+              </span>
+            </div>
+
+            <p>
+              Используйте инструменты слева на карте: нарисуйте один или
+              несколько полигонов, затем при необходимости отредактируйте их.
+            </p>
+
+            <div class="button-grid">
+              <button
+                type="button"
+                class="button secondary"
+                id="defaultRegion"
+              >
+                Баренцево море
+              </button>
+
+              <button
+                type="button"
+                class="button secondary"
+                id="loadGeoJSON"
+              >
+                Загрузить GeoJSON
+              </button>
+
+              <button
+                type="button"
+                class="button ghost"
+                id="saveGeoJSON"
+              >
+                Сохранить регион
+              </button>
+
+              <input
+                id="geoJSONFile"
+                type="file"
+                accept=".geojson,.json,application/geo+json,application/json"
+                hidden
+              />
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            class="button primary search-button"
+            id="searchButton"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="6.5"></circle>
+              <path d="m16 16 4 4"></path>
+            </svg>
+            <span>Найти снимки</span>
+          </button>
+        </form>
+      </section>
+
+      <section class="map-panel panel" id="mapSection">
+        <div class="map-toolbar">
+          <div>
+            <span class="eyebrow">Область наблюдения</span>
+            <h2>Баренцево море</h2>
+          </div>
+
+          <div class="legend">
+            <span>
+              <i class="legend-region"></i>
+              Регион
+            </span>
+            <span>
+              <i class="legend-scenes"></i>
+              Найденные сцены
+            </span>
+            <span>
+              <i class="legend-scene-selected"></i>
+              Выбранная сцена
+            </span>
+          </div>
+        </div>
+
+        <div id="map" aria-label="Карта региона мониторинга"></div>
+
+        <div class="map-attribution-note">
+          <span>WGS 84 · EPSG:4326</span>
+          <label
+            class="map-opacity-control"
+            id="mapOpacityControl"
+            hidden
+          >
+            <span>Прозрачность маски</span>
+            <input
+              id="overlayOpacity"
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value="0.75"
+            />
+          </label>
+          <span>Расчёт площадей · EPSG:6931</span>
+        </div>
+      </section>
+
+      <section
+        class="summary-grid"
+        id="summaryGrid"
+        aria-label="Сводка поиска"
+        hidden
+      >
+        <article class="summary-card">
+          <span class="summary-index">01</span>
+          <span class="summary-label">Найдено сцен</span>
+          <strong id="sceneCount">—</strong>
+          <small id="sceneCountNote">Выполните первый поиск</small>
+        </article>
+
+        <article class="summary-card">
+          <span class="summary-index">02</span>
+          <span class="summary-label">Последняя съёмка</span>
+          <strong id="latestScene">—</strong>
+          <small>По выбранному региону</small>
+        </article>
+
+        <article class="summary-card">
+          <span class="summary-index">03</span>
+          <span class="summary-label">Основной источник</span>
+          <strong id="activeSource">S-1</strong>
+          <small id="activeSourceNote">SAR · GRD</small>
+        </article>
+
+        <article class="summary-card accent-card">
+          <span class="summary-index">04</span>
+          <span class="summary-label">Концентрация льда</span>
+          <strong id="summaryConcentration">—</strong>
+          <small id="summaryConcentrationNote">
+            Обработайте Sentinel-1 GRD
+          </small>
+        </article>
+      </section>
+
+      <section
+        class="results-panel panel"
+        id="resultsPanel"
+        hidden
+      >
+        <div class="results-heading">
+          <div>
+            <span class="eyebrow">Каталог Copernicus</span>
+            <h2>Доступные сцены</h2>
+          </div>
+
+          <div class="request-state" id="requestState">
+            Ожидание запроса
+          </div>
+        </div>
+
+        <div class="empty-state" id="emptyState">
+          <div class="empty-icon">
+            <svg viewBox="0 0 48 48" aria-hidden="true">
+              <path d="M8 35 17 17l8-5 11 8 4 15Z"></path>
+              <path d="m8 35 12-4 6 3 7-5 7 6"></path>
+            </svg>
+          </div>
+
+          <h3 id="emptyStateTitle">Снимки не найдены</h3>
+          <p id="emptyStateText">
+            Задайте область и временной диапазон, затем нажмите
+            «Найти снимки».
+          </p>
+        </div>
+
+        <div class="table-wrap" id="tableWrap" hidden>
+          <table>
+            <thead>
+              <tr>
+                <th>Покрытие</th>
+                <th>Дата и время</th>
+                <th>Продукт</th>
+                <th>Спутник</th>
+                <th>Параметры</th>
+                <th>Загрузка</th>
+              </tr>
+            </thead>
+            <tbody id="sceneRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section
+        class="processing-panel panel"
+        id="processingPanel"
+        aria-live="polite"
+        hidden
+      >
+        <div class="results-heading">
+          <div>
+            <span class="eyebrow">Обработка Sentinel-1</span>
+            <h2>Ледовая карта</h2>
+          </div>
+
+          <div class="request-state" id="processingState">
+            Ожидание сцены
+          </div>
+        </div>
+
+        <div class="processing-layout">
+          <form class="processing-controls" id="processingForm">
+            <div class="selected-scene">
+              <span class="field-title">Выбранный продукт</span>
+              <strong id="selectedProduct">Сцена не выбрана</strong>
+              <small id="selectedProductNote">
+                Выберите Sentinel-1 GRD в таблице выше
+              </small>
+            </div>
+
+            <div class="field-grid processing-fields">
+              <label class="field">
+                <span>Поляризация</span>
+                <select id="processingPolarization">
+                  <option value="AUTO" selected>Автоматически</option>
+                  <option value="HH">HH</option>
+                  <option value="VV">VV</option>
+                  <option value="HV">HV</option>
+                  <option value="VH">VH</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>Размер пикселя</span>
+                <div class="input-suffix">
+                  <input
+                    id="processingPixelSize"
+                    type="number"
+                    value="1000"
+                    min="20"
+                    max="1000"
+                    step="10"
+                  />
+                  <span>м</span>
+                </div>
+              </label>
+
+              <label class="field">
+                <span>Порог лёд / вода</span>
+                <div class="input-suffix">
+                  <input
+                    id="processingThreshold"
+                    type="number"
+                    value="-18"
+                    min="-40"
+                    max="0"
+                    step="0.5"
+                  />
+                  <span>dB</span>
+                </div>
+              </label>
+
+              <label class="field">
+                <span>Неопределённая зона ±</span>
+                <div class="input-suffix">
+                  <input
+                    id="processingUncertainty"
+                    type="number"
+                    value="1.5"
+                    min="0"
+                    max="5"
+                    step="0.5"
+                  />
+                  <span>dB</span>
+                </div>
+              </label>
+            </div>
+
+            <div class="processing-actions">
+              <button
+                type="submit"
+                class="button primary search-button"
+                id="processButton"
+                disabled
+              >
+                <span>Обработать на сервере</span>
+              </button>
+
+              <button
+                type="button"
+                class="button delete-source-button"
+                id="deleteSourceButton"
+                disabled
+              >
+                Удалить загруженный SAFE
+              </button>
+            </div>
+
+            <p class="processing-help">
+              Сервер временно загрузит SAFE, SNAP выполнит коррекции и
+              фильтрацию, затем Julia построит пороговую маску. Исходный SAFE
+              будет удалён автоматически даже при ошибке обработки.
+            </p>
+          </form>
+
+          <div class="processing-result">
+            <div class="processing-empty" id="processingEmpty">
+              <div class="processing-empty-mark">02</div>
+              <div>
+                <h3>Результат появится здесь</h3>
+                <p>
+                  После обработки маска будет наложена на карту, а площади
+                  рассчитаны в EPSG:6931.
+                </p>
+              </div>
+            </div>
+
+            <div id="processingMetrics" hidden>
+              <div class="metric-grid">
+                <article class="metric-card ice-metric">
+                  <span>Площадь льда</span>
+                  <strong id="iceArea">—</strong>
+                  <small>км²</small>
+                </article>
+
+                <article class="metric-card water-metric">
+                  <span>Площадь воды</span>
+                  <strong id="waterArea">—</strong>
+                  <small>км²</small>
+                </article>
+
+                <article class="metric-card uncertain-metric">
+                  <span>Неопределённо</span>
+                  <strong id="uncertainArea">—</strong>
+                  <small>км²</small>
+                </article>
+
+                <article class="metric-card concentration-metric">
+                  <span>Концентрация льда</span>
+                  <strong id="iceConcentration">—</strong>
+                  <small>%</small>
+                </article>
+
+                <article class="metric-card coverage-metric">
+                  <span>Покрытие региона</span>
+                  <strong id="regionCoverage">—</strong>
+                  <small>% сцены</small>
+                </article>
+              </div>
+
+              <div class="overlay-controls">
+                <div class="overlay-legend" aria-label="Легенда ледовой карты">
+                  <span><i class="overlay-ice"></i>Лёд</span>
+                  <span><i class="overlay-water"></i>Вода</span>
+                  <span><i class="overlay-uncertain"></i>Неопределённо</span>
+                </div>
+              </div>
+
+              <p class="result-warning" id="resultWarning"></p>
+
+              <div class="export-buttons">
+                <a class="button secondary" id="downloadAreaMask">
+                  GeoTIFF · EPSG:6931
+                </a>
+                <a class="button secondary" id="downloadMapMask">
+                  GeoTIFF · EPSG:4326
+                </a>
+                <a class="button secondary" id="downloadReport">CSV</a>
+                <a class="button ghost" id="downloadMetadata">JSON</a>
+                <a class="button ghost" id="downloadSnapLog">Лог SNAP</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="app-footer">
+      <span>IceSeaMonitor · МТС Цифровая экосистема</span>
+      <span>Satellite intelligence for Arctic operations</span>
+    </footer>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
