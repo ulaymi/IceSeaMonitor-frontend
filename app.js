@@ -5,6 +5,8 @@ const THEME_STORAGE_KEY = "iceSeaMonitor.theme";
 const API_BASE_URL = (
   document.querySelector('meta[name="ice-api-base"]')?.content || ""
 ).replace(/\/$/, "");
+const IS_STATIC_DEMO =
+  !API_BASE_URL && window.location.hostname.endsWith(".github.io");
 
 const state = {
   map: null,
@@ -290,6 +292,19 @@ function cssThemeColor(variableName, fallback) {
 }
 
 async function loadServerConfig() {
+  if (IS_STATIC_DEMO) {
+    elements.serverStatus.textContent = "Демо · backend не подключён";
+    elements.credentialStatus.textContent = "";
+    elements.snapStatus.textContent = "";
+    elements.storageStatus.textContent = "";
+    for (const separator of document.querySelectorAll(
+      ".header-status .separator",
+    )) {
+      separator.hidden = true;
+    }
+    return;
+  }
+
   try {
     const health = await fetchJSON(apiUrl("/api/health"));
     elements.serverDot.classList.add("ok");
@@ -323,7 +338,9 @@ async function loadServerConfig() {
 
 async function loadDefaultRegion() {
   try {
-    let response = await fetch(apiUrl("/api/region/default"));
+    let response = IS_STATIC_DEMO
+      ? await fetch("assets/barents_sea.geojson")
+      : await fetch(apiUrl("/api/region/default"));
     if (!response.ok) {
       response = await fetch("assets/barents_sea.geojson");
     }
@@ -446,6 +463,15 @@ function updateSourceControls() {
 
 async function handleSearch(event) {
   event.preventDefault();
+
+  if (IS_STATIC_DEMO) {
+    elements.requestState.textContent = "Backend не подключён";
+    elements.requestState.className = "request-state";
+    showToast(
+      "Это демонстрация интерфейса. Для поиска сцен подключите backend-сервер.",
+    );
+    return;
+  }
 
   let geometry;
   try {
@@ -1673,9 +1699,18 @@ function formatCompactDate(value) {
 async function fetchJSON(url, options = undefined) {
   const response = await fetch(url, options);
   const contentType = response.headers.get("content-type") || "";
-  const data = contentType.includes("application/json")
-    ? await response.json()
-    : { error: await response.text() };
+  let data;
+  if (contentType.includes("application/json")) {
+    data = await response.json();
+  } else {
+    const responseText = (await response.text()).trim();
+    const isHTML =
+      contentType.includes("text/html") ||
+      /^<!doctype\s+html|^<html/i.test(responseText);
+    data = {
+      error: isHTML ? "" : responseText.slice(0, 300),
+    };
+  }
 
   if (!response.ok) {
     throw new Error(data.error || `Ошибка HTTP ${response.status}`);
