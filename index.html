@@ -7,15 +7,17 @@
     <meta name="ice-api-base" content="" />
     <meta
       name="description"
-      content="IceSeaMonitor — мониторинг морского льда по данным Sentinel-1 и Sentinel-2"
+      content="NatObserve — спутниковый мониторинг морского льда и опустынивания"
     />
 
-    <title>IceSeaMonitor · МТС</title>
+    <title>NatObserve · МТС</title>
 
     <script>
       (() => {
         try {
-          const savedTheme = localStorage.getItem("iceSeaMonitor.theme");
+          const savedTheme =
+            localStorage.getItem("natObserve.theme") ||
+            localStorage.getItem("iceSeaMonitor.theme");
           const preferredTheme =
             savedTheme === "light" || savedTheme === "dark"
               ? savedTheme
@@ -41,20 +43,47 @@
   </head>
 
   <body>
-    <header class="app-header">
-      <div class="utility-bar">
-        <nav class="audience-nav" aria-label="Направления платформы">
-          <span class="audience-nav-active">Геоаналитика</span>
-          <span>Спутниковые данные</span>
-          <span>Арктический мониторинг</span>
-        </nav>
-
-        <div class="utility-meta">
-          <span>Баренцево море</span>
-          <span>EPSG:4326</span>
+    <section class="mode-gate" id="modeGate" aria-labelledby="modeGateTitle">
+      <div class="mode-gate-card">
+        <div class="mode-gate-brand">
+          <img src="assets/mts-eco-logo.svg" alt="МТС — цифровая экосистема" />
+          <div>
+            <span class="eyebrow">Спутниковая аналитическая платформа</span>
+            <h1>NatObserve</h1>
+          </div>
         </div>
+        <div class="mode-gate-copy">
+          <span class="step-badge">Выберите направление</span>
+          <h2 id="modeGateTitle">Что исследуем сегодня?</h2>
+          <p>
+            Одна платформа объединяет радиолокационный мониторинг морского
+            льда и многолетний анализ опустынивания по Sentinel‑2.
+          </p>
+        </div>
+        <div class="mode-options">
+          <button class="mode-option mode-option-ice" type="button" data-mode="ice">
+            <span class="mode-option-index">01</span>
+            <span class="mode-option-icon" aria-hidden="true">✦</span>
+            <strong>Ледовая обстановка</strong>
+            <small>Sentinel‑1 SAR · ледовый покров, вода и навигационный риск</small>
+            <span class="mode-option-action">Открыть мониторинг →</span>
+          </button>
+          <button class="mode-option mode-option-land" type="button" data-mode="desertification">
+            <span class="mode-option-index">02</span>
+            <span class="mode-option-icon" aria-hidden="true">◒</span>
+            <strong>Опустынивание</strong>
+            <small>Sentinel‑2 L2A · NDVI, NDMI, BSI, тренды и проблемные зоны</small>
+            <span class="mode-option-action">Открыть анализ →</span>
+          </button>
+        </div>
+        <p class="mode-gate-note">
+          Исходные SAFE обрабатываются на сервере и удаляются из временной
+          рабочей области после завершения задания.
+        </p>
       </div>
+    </section>
 
+    <header class="app-header" id="appHeader" hidden>
       <div class="primary-nav">
         <div class="brand">
           <a class="mws-logo" href="./" aria-label="МТС — цифровая экосистема">
@@ -65,19 +94,15 @@
           </a>
 
           <div class="product-nameplate">
-            <h1>IceSeaMonitor</h1>
-            <p>Мониторинг морского льда</p>
+            <h1>NatObserve</h1>
+            <p id="productSubtitle">Спутниковый мониторинг территорий</p>
           </div>
         </div>
 
-        <nav class="product-nav" aria-label="Разделы IceSeaMonitor">
-          <a href="#searchSection">Поиск</a>
-          <a href="#mapSection">Карта</a>
-          <a href="#resultsPanel">Сцены</a>
-          <a href="#processingPanel">Обработка</a>
-        </nav>
-
         <div class="header-actions">
+          <button class="mode-switch" id="modeSwitch" type="button">
+            Сменить направление
+          </button>
           <div class="header-status">
             <div class="status-item">
               <span class="status-dot" id="serverDot"></span>
@@ -117,7 +142,7 @@
       </div>
     </header>
 
-    <main class="workspace">
+    <main class="workspace" id="workspace" hidden>
       <section class="control-panel panel" id="searchSection">
         <div class="panel-heading">
           <div>
@@ -189,68 +214,32 @@
             </label>
           </div>
 
-          <div class="region-block">
-            <div class="region-heading">
-              <div>
-                <span class="field-title">Регион мониторинга</span>
-                <small id="regionStatus">Баренцево море · EPSG:4326</small>
-              </div>
+          <div class="scene-source-actions">
+            <button
+              type="submit"
+              class="button primary search-button"
+              id="searchButton"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="11" cy="11" r="6.5"></circle>
+                <path d="m16 16 4 4"></path>
+              </svg>
+              <span>Найти снимки</span>
+            </button>
 
-              <span class="region-ready" id="regionReady">
-                Полигон задан
-              </span>
-            </div>
-
-            <p>
-              Используйте инструменты слева на карте: нарисуйте один или
-              несколько полигонов, затем при необходимости отредактируйте их.
-            </p>
-
-            <div class="button-grid">
-              <button
-                type="button"
-                class="button secondary"
-                id="defaultRegion"
-              >
-                Баренцево море
-              </button>
-
-              <button
-                type="button"
-                class="button secondary"
-                id="loadGeoJSON"
-              >
-                Загрузить GeoJSON
-              </button>
-
-              <button
-                type="button"
-                class="button ghost"
-                id="saveGeoJSON"
-              >
-                Сохранить регион
-              </button>
-
-              <input
-                id="geoJSONFile"
-                type="file"
-                accept=".geojson,.json,application/geo+json,application/json"
-                hidden
-              />
-            </div>
+            <button
+              type="button"
+              class="button secondary search-button storage-check-button"
+              id="storageButton"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 7c0-1.7 3.1-3 7-3s7 1.3 7 3-3.1 3-7 3-7-1.3-7-3Z"></path>
+                <path d="M5 7v5c0 1.7 3.1 3 7 3s7-1.3 7-3V7"></path>
+                <path d="M5 12v5c0 1.7 3.1 3 7 3s7-1.3 7-3v-5"></path>
+              </svg>
+              <span>Проверить хранилище</span>
+            </button>
           </div>
-
-          <button
-            type="submit"
-            class="button primary search-button"
-            id="searchButton"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="11" cy="11" r="6.5"></circle>
-              <path d="m16 16 4 4"></path>
-            </svg>
-            <span>Найти снимки</span>
-          </button>
         </form>
       </section>
 
@@ -258,44 +247,54 @@
         <div class="map-toolbar">
           <div>
             <span class="eyebrow">Область наблюдения</span>
-            <h2>Баренцево море</h2>
+            <h2 id="mapTitle">Карта наблюдений</h2>
           </div>
 
           <div class="legend">
             <span>
               <i class="legend-region"></i>
-              Регион
+              <span id="regionLegendLabel">Регион</span>
             </span>
             <span>
               <i class="legend-scenes"></i>
-              Найденные сцены
+              <span id="scenesLegendLabel">Найденные сцены</span>
             </span>
             <span>
               <i class="legend-scene-selected"></i>
-              Выбранная сцена
+              <span id="selectedLegendLabel">Выбранная сцена</span>
             </span>
           </div>
         </div>
 
-        <div id="map" aria-label="Карта региона мониторинга"></div>
+        <div id="map" aria-label="Карта области наблюдения"></div>
 
         <div class="map-attribution-note">
           <span>WGS 84 · EPSG:4326</span>
-          <label
-            class="map-opacity-control"
-            id="mapOpacityControl"
-            hidden
-          >
-            <span>Прозрачность маски</span>
-            <input
-              id="overlayOpacity"
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value="0.75"
-            />
-          </label>
+          <div class="map-result-controls">
+            <label
+              class="map-opacity-control"
+              id="mapOpacityControl"
+              hidden
+            >
+              <span>Прозрачность масок</span>
+              <input
+                id="overlayOpacity"
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value="0.75"
+              />
+            </label>
+            <button
+              class="button clear-map-results-button"
+              id="clearMapResultsButton"
+              type="button"
+              hidden
+            >
+              Очистить карту
+            </button>
+          </div>
           <span>Расчёт площадей · EPSG:6931</span>
         </div>
       </section>
@@ -329,7 +328,7 @@
 
         <article class="summary-card accent-card">
           <span class="summary-index">04</span>
-          <span class="summary-label">Концентрация льда</span>
+          <span class="summary-label" id="summaryMetricLabel">Концентрация льда</span>
           <strong id="summaryConcentration">—</strong>
           <small id="summaryConcentrationNote">
             Обработайте Sentinel-1 GRD
@@ -344,7 +343,9 @@
       >
         <div class="results-heading">
           <div>
-            <span class="eyebrow">Каталог Copernicus</span>
+            <span class="eyebrow" id="resultsSourceLabel">
+              Каталог Copernicus
+            </span>
             <h2>Доступные сцены</h2>
           </div>
 
@@ -567,11 +568,101 @@
           </div>
         </div>
       </section>
+
+      <section
+        class="processing-panel panel land-processing-panel"
+        id="landProcessingPanel"
+        aria-live="polite"
+        hidden
+      >
+        <div class="results-heading">
+          <div>
+            <span class="eyebrow">GeoIntellect · Sentinel‑2 L2A</span>
+            <h2>Оценка опустынивания</h2>
+          </div>
+          <div class="request-state" id="landProcessingState">Ожидание серии</div>
+        </div>
+
+        <div class="land-processing-layout">
+          <form class="land-controls" id="landProcessingForm">
+            <div class="selected-scene">
+              <span class="field-title">Выбранная временная серия</span>
+              <strong id="landSelectedCount">0 сцен</strong>
+              <small>
+                Добавьте Sentinel‑2 SAFE из таблицы. Для устойчивого тренда
+                рекомендуется не менее шести дат.
+              </small>
+              <div class="land-selected-list" id="landSelectedList"></div>
+            </div>
+            <div class="field-grid processing-fields">
+              <label class="field">
+                <span>Порог голой почвы BSI</span>
+                <input id="landBareThreshold" type="number" value="0.17" min="-1" max="1" step="0.01" />
+              </label>
+              <label class="field">
+                <span>Минимум наблюдений</span>
+                <input id="landMinObservations" type="number" value="6" min="2" max="60" step="1" />
+              </label>
+            </div>
+            <button class="button primary search-button" id="processLandButton" type="submit" disabled>
+              <span>Запустить GeoIntellect</span>
+            </button>
+            <p class="processing-help">
+              ETL читает B02/B03/B04/B08/B11/B12 и SCL, строит NDVI, NDMI,
+              NBR и BSI. Julia-модель определяет классы деградации, зоны риска
+              и многолетние тренды. Временные SAFE удаляются автоматически.
+            </p>
+          </form>
+
+          <div class="land-dashboard">
+            <div class="demo-data-banner" id="landDemoBanner">
+              Демонстрационная сводка структуры отчёта GeoIntellect. На карту
+              демонстрационные данные не добавляются.
+            </div>
+            <div class="land-metric-grid">
+              <article><span>Период наблюдений</span><strong id="landMetricPeriod">2020–2025</strong><small>демо</small></article>
+              <article><span>Проблемные зоны</span><strong id="landMetricZones">2</strong><small>демо</small></article>
+              <article><span>Сильное опустынивание</span><strong id="landMetricStrong">8,20 км²</strong><small>демо</small></article>
+              <article><span>Макс. приоритет</span><strong id="landMetricPriority">86,8</strong><small>демо</small></article>
+            </div>
+            <div class="land-trend-card">
+              <div>
+                <span class="field-title">Динамика индексов проблемной зоны №1</span>
+                <small id="landTrendCaption">Демо · нормированные значения 2020–2025</small>
+              </div>
+              <div class="land-trend-chart" id="landTrendChart" aria-label="График динамики NDVI, NDMI и BSI"></div>
+              <div class="land-chart-legend">
+                <span><i class="trend-ndvi"></i>NDVI</span>
+                <span><i class="trend-ndmi"></i>NDMI</span>
+                <span><i class="trend-bsi"></i>BSI</span>
+              </div>
+            </div>
+            <div class="land-result" id="landResult" hidden>
+              <p class="result-warning" id="landResultWarning"></p>
+              <div class="overlay-legend" aria-label="Легенда карты опустынивания">
+                <span><i class="land-stable"></i>Стабильно</span>
+                <span><i class="land-weak"></i>Слабое</span>
+                <span><i class="land-strong"></i>Сильное</span>
+                <span><i class="land-recovery"></i>Восстановление</span>
+              </div>
+              <div class="export-buttons">
+                <a class="button secondary" id="downloadDesertificationMap">Опустынивание GeoTIFF</a>
+                <a class="button secondary" id="downloadPastureMap">Пастбища GeoTIFF</a>
+                <a class="button secondary" id="downloadProblemZones">Зоны GeoJSON</a>
+                <a class="button secondary" id="downloadLandReport">Рейтинг CSV</a>
+                <a class="button ghost" id="downloadLandTimeseries">Ряды CSV</a>
+                <a class="button ghost" id="downloadLandMetadata">JSON</a>
+                <a class="button ghost" id="downloadLandLog">Лог модели</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
     </main>
 
-    <footer class="app-footer">
-      <span>IceSeaMonitor · МТС Цифровая экосистема</span>
-      <span>Satellite intelligence for Arctic operations</span>
+    <footer class="app-footer" id="appFooter" hidden>
+      <span>NatObserve · МТС Цифровая экосистема</span>
+      <span id="footerContext">Satellite intelligence for natural systems</span>
     </footer>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>

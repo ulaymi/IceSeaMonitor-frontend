@@ -1,15 +1,18 @@
 "use strict";
 
-const PROCESSING_JOB_STORAGE_KEY = "iceSeaMonitor.processingJobId";
-const THEME_STORAGE_KEY = "iceSeaMonitor.theme";
+const PROCESSING_JOB_STORAGE_KEY = "natObserve.processingJobId";
+const RESULT_OVERLAYS_STORAGE_KEY = "natObserve.resultOverlays";
+const THEME_STORAGE_KEY = "natObserve.theme";
 const API_BASE_URL = (
   document.querySelector('meta[name="ice-api-base"]')?.content || ""
 ).replace(/\/$/, "");
 const IS_STATIC_DEMO =
   !API_BASE_URL && window.location.hostname.endsWith(".github.io");
+const VALID_ANALYSIS_MODES = new Set(["ice", "desertification"]);
 
 const state = {
   map: null,
+  baseLayer: null,
   drawnItems: null,
   sceneLayers: [],
   opticalLayer: null,
@@ -24,9 +27,13 @@ const state = {
   completedProcessingSourceFilename: "",
   completedProcessingMode: "",
   selectedProcessingStorageKey: "",
-  resultLayer: null,
+  resultLayers: [],
+  resultOverlayRecords: [],
   toastTimer: null,
   searchGeneration: 0,
+  analysisMode: "",
+  desertificationModelAvailable: false,
+  selectedLandScenes: [],
 };
 
 const elements = {};
@@ -35,18 +42,32 @@ document.addEventListener("DOMContentLoaded", initialise);
 
 async function initialise() {
   cacheElements();
+  if (!initialiseMode()) return;
   initialiseTheme();
   initialiseDates();
   initialiseMap();
   bindEvents();
   updateSourceControls();
+  initialiseLandDemoDashboard();
 
   await Promise.all([loadDefaultRegion(), loadServerConfig()]);
+  restoreResultOverlays();
   resumeProcessingJob();
 }
 
 function cacheElements() {
   const ids = [
+    "modeGate",
+    "appHeader",
+    "workspace",
+    "appFooter",
+    "modeSwitch",
+    "productSubtitle",
+    "footerContext",
+    "mapTitle",
+    "regionLegendLabel",
+    "scenesLegendLabel",
+    "selectedLegendLabel",
     "serverDot",
     "serverStatus",
     "credentialStatus",
@@ -64,14 +85,10 @@ function cacheElements() {
     "cloudCover",
     "cloudField",
     "resultLimit",
-    "regionStatus",
-    "regionReady",
-    "defaultRegion",
-    "loadGeoJSON",
-    "saveGeoJSON",
-    "geoJSONFile",
     "searchButton",
+    "storageButton",
     "mapOpacityControl",
+    "resultsSourceLabel",
     "summaryGrid",
     "sceneCount",
     "sceneCountNote",
@@ -105,6 +122,7 @@ function cacheElements() {
     "regionCoverage",
     "summaryConcentration",
     "summaryConcentrationNote",
+    "summaryMetricLabel",
     "overlayOpacity",
     "resultWarning",
     "downloadAreaMask",
@@ -112,12 +130,93 @@ function cacheElements() {
     "downloadReport",
     "downloadMetadata",
     "downloadSnapLog",
+    "clearMapResultsButton",
+    "landProcessingPanel",
+    "landProcessingForm",
+    "landProcessingState",
+    "landSelectedCount",
+    "landSelectedList",
+    "landBareThreshold",
+    "landMinObservations",
+    "processLandButton",
+    "landDemoBanner",
+    "landMetricPeriod",
+    "landMetricZones",
+    "landMetricStrong",
+    "landMetricPriority",
+    "landTrendCaption",
+    "landTrendChart",
+    "landResult",
+    "landResultWarning",
+    "downloadDesertificationMap",
+    "downloadPastureMap",
+    "downloadProblemZones",
+    "downloadLandReport",
+    "downloadLandTimeseries",
+    "downloadLandMetadata",
+    "downloadLandLog",
     "toast",
   ];
 
   for (const id of ids) {
     elements[id] = document.getElementById(id);
   }
+}
+
+function initialiseMode() {
+  const requestedMode = new URLSearchParams(window.location.search).get("mode");
+  for (const button of document.querySelectorAll("[data-mode]")) {
+    button.addEventListener("click", () => {
+      const mode = button.dataset.mode;
+      if (!VALID_ANALYSIS_MODES.has(mode)) return;
+      const url = new URL(window.location.href);
+      url.searchParams.set("mode", mode);
+      window.location.assign(url);
+    });
+  }
+
+  if (!VALID_ANALYSIS_MODES.has(requestedMode)) {
+    elements.modeGate.hidden = false;
+    return false;
+  }
+
+  state.analysisMode = requestedMode;
+  elements.modeGate.hidden = true;
+  elements.appHeader.hidden = false;
+  elements.workspace.hidden = false;
+  elements.appFooter.hidden = false;
+  elements.modeSwitch.addEventListener("click", () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("mode");
+    window.location.assign(url);
+  });
+
+  const isLand = requestedMode === "desertification";
+  elements.productSubtitle.textContent = isLand
+    ? "Мониторинг опустынивания"
+    : "Мониторинг морского льда";
+  elements.footerContext.textContent = isLand
+    ? "Sentinel-2 land degradation intelligence"
+    : "Sentinel-1 Arctic navigation intelligence";
+  elements.mapTitle.textContent = isLand
+    ? "Карта деградации земель"
+    : "Карта ледовой обстановки";
+  elements.regionLegendLabel.textContent = "Область анализа";
+  elements.scenesLegendLabel.textContent = "Сцены";
+  elements.selectedLegendLabel.textContent = "Активная сцена";
+  elements.summaryMetricLabel.textContent = isLand
+    ? "Индекс риска"
+    : "Концентрация льда";
+  elements.summaryConcentration.textContent = "—";
+  elements.summaryConcentrationNote.textContent = isLand
+    ? "Запустите GeoIntellect"
+    : "Обработайте Sentinel-1 GRD";
+  elements.landProcessingPanel.hidden = !isLand;
+  if (isLand) {
+    elements.collection.value = "sentinel-2-l2a";
+    elements.collection.disabled = true;
+  }
+  return true;
 }
 
 function initialiseTheme() {
@@ -145,6 +244,7 @@ function applyTheme(theme, persist = false) {
   elements.themeToggle.setAttribute("aria-label", actionLabel);
   elements.themeToggle.title = actionLabel;
   elements.themeColor.setAttribute("content", isDark ? "#111216" : "#ffffff");
+  updateBaseMap();
   refreshSceneOutlineStyles();
 
   if (persist) {
@@ -159,7 +259,9 @@ function applyTheme(theme, persist = false) {
 function initialiseDates() {
   const today = new Date();
   const todayText = formatDateInput(today);
-  elements.dateFrom.value = "2026-06-27";
+  elements.dateFrom.value = state.analysisMode === "desertification"
+    ? "2020-05-01"
+    : "2026-06-27";
   elements.dateTo.value = "2026-07-27";
   elements.dateTo.max = todayText;
   elements.dateFrom.max = todayText;
@@ -173,17 +275,19 @@ function formatDateInput(date) {
 }
 
 function initialiseMap() {
+  const isLand = state.analysisMode === "desertification";
   state.map = L.map("map", {
-    center: [75.2, 34],
-    zoom: 4,
+    center: isLand ? [46.94, 45.03] : [75.2, 34],
+    zoom: isLand ? 11 : 4,
     minZoom: 2,
     zoomControl: true,
   });
+  state.map.attributionControl.setPrefix(
+    '<a href="https://leafletjs.com/" target="_blank" ' +
+      'rel="noopener noreferrer">Leaflet</a>',
+  );
 
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: "&copy; OpenStreetMap",
-    maxZoom: 19,
-  }).addTo(state.map);
+  updateBaseMap();
 
   state.drawnItems = new L.FeatureGroup();
   state.drawnItems.addTo(state.map);
@@ -235,21 +339,42 @@ function initialiseMap() {
   }
 }
 
+function updateBaseMap() {
+  if (!state.map) return;
+
+  if (state.baseLayer) {
+    state.map.removeLayer(state.baseLayer);
+  }
+  state.baseLayer = L.tileLayer(
+    "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    {
+      attribution:
+        '&copy; <a href="https://www.openstreetmap.org/copyright">' +
+        "OpenStreetMap contributors</a>",
+      maxZoom: 19,
+    },
+  ).addTo(state.map);
+  state.baseLayer.bringToBack();
+}
+
 function bindEvents() {
   elements.collection.addEventListener("change", updateSourceControls);
   elements.searchForm.addEventListener("submit", handleSearch);
-  elements.defaultRegion.addEventListener("click", loadDefaultRegion);
-  elements.loadGeoJSON.addEventListener("click", () =>
-    elements.geoJSONFile.click(),
-  );
-  elements.geoJSONFile.addEventListener("change", handleGeoJSONFile);
-  elements.saveGeoJSON.addEventListener("click", saveRegion);
+  elements.storageButton.addEventListener("click", handleStorageCheck);
   elements.processingForm.addEventListener("submit", handleProcessing);
   elements.deleteSourceButton.addEventListener(
     "click",
     handleDeleteDownloadedProduct,
   );
   elements.overlayOpacity.addEventListener("input", updateOverlayOpacity);
+  elements.clearMapResultsButton.addEventListener(
+    "click",
+    clearProcessedMap,
+  );
+  elements.landProcessingForm.addEventListener(
+    "submit",
+    handleLandProcessing,
+  );
 }
 
 function regionStyle() {
@@ -316,16 +441,24 @@ async function loadServerConfig() {
     state.objectStorageConfigured = Boolean(
       config.object_storage_configured,
     );
+    state.desertificationModelAvailable = Boolean(
+      config.desertification_model_available,
+    );
     elements.credentialStatus.textContent = state.credentialsConfigured
       ? "CDSE: загрузка настроена"
       : "CDSE: добавьте данные в .env";
-    elements.snapStatus.textContent = state.snapAvailable
-      ? "SNAP: готов"
-      : "SNAP: задайте путь в .env";
+    elements.snapStatus.textContent = state.analysisMode === "desertification"
+      ? state.desertificationModelAvailable
+        ? "GeoIntellect: готов"
+        : "GeoIntellect: модель не найдена"
+      : state.snapAvailable
+        ? "SNAP: готов"
+        : "SNAP: задайте путь в .env";
     elements.storageStatus.textContent = state.objectStorageConfigured
       ? `Storage: ${config.object_storage_bucket}`
       : "Storage: добавьте ключи в .env";
     updateProcessButtonState();
+    updateLandSelection();
   } catch (error) {
     elements.serverDot.classList.add("error");
     elements.serverStatus.textContent = "Сервер недоступен";
@@ -338,18 +471,21 @@ async function loadServerConfig() {
 
 async function loadDefaultRegion() {
   try {
+    const isLand = state.analysisMode === "desertification";
+    const asset = isLand
+      ? "assets/kalmykia_aoi.geojson"
+      : "assets/barents_sea.geojson";
     let response = IS_STATIC_DEMO
-      ? await fetch("assets/barents_sea.geojson")
-      : await fetch(apiUrl("/api/region/default"));
+      ? await fetch(asset)
+      : await fetch(apiUrl(`/api/region/default${isLand ? "?mode=desertification" : ""}`));
     if (!response.ok) {
-      response = await fetch("assets/barents_sea.geojson");
+      response = await fetch(asset);
     }
     if (!response.ok) {
       throw new Error("Не удалось загрузить регион по умолчанию.");
     }
     const geojson = await response.json();
     setRegionGeoJSON(geojson);
-    elements.regionStatus.textContent = "Баренцево море · EPSG:4326";
   } catch (error) {
     showToast(error.message, true);
   }
@@ -408,7 +544,7 @@ function geometryFromMap() {
   });
 
   if (geometries.length === 0) {
-    throw new Error("Нарисуйте регион мониторинга на карте.");
+    throw new Error("Нарисуйте область анализа на карте.");
   }
   return mergeGeometries(geometries);
 }
@@ -433,18 +569,14 @@ function mergeGeometries(geometries) {
 }
 
 function updateRegionStatus() {
-  const count = state.drawnItems.getLayers().length;
-  elements.regionReady.textContent =
-    count === 0
-      ? "Полигон не задан"
-      : count === 1
-        ? "Полигон задан"
-        : `Полигонов: ${count}`;
-  elements.regionReady.classList.toggle("missing", count === 0);
   if (state.selectedProcessingScene) {
     clearProcessingSelection(
-      "Регион изменён. Выберите подходящую сцену заново.",
+      "Область изменена. Выберите подходящую сцену заново.",
     );
+  }
+  if (state.analysisMode === "desertification" && state.selectedLandScenes.length) {
+    elements.landProcessingState.textContent = "Область изменена";
+    elements.landProcessingState.className = "request-state loading";
   }
 }
 
@@ -453,7 +585,9 @@ function updateSourceControls() {
   elements.cloudCover.disabled = !isSentinel2;
   elements.cloudField.style.opacity = isSentinel2 ? "1" : "0.56";
   elements.sourceHint.textContent = isSentinel2
-    ? "Оптическое уточнение при достаточном освещении и малой облачности."
+    ? state.analysisMode === "desertification"
+      ? "Sentinel-2 L2A: спектральные каналы и SCL для модели GeoIntellect."
+      : "Оптическое уточнение при достаточном освещении и малой облачности."
     : "Основной источник: работает ночью и через облачность.";
   elements.activeSource.textContent = isSentinel2 ? "S-2" : "S-1";
   elements.activeSourceNote.textContent = isSentinel2
@@ -490,12 +624,18 @@ async function handleSearch(event) {
     geometry,
   };
 
-  setSearchLoading(true);
+  setSearchLoading(true, "catalogue");
+  elements.resultsSourceLabel.textContent = "Каталог Copernicus";
   setSearchResultsVisibility(false);
   clearSceneOutlines();
-  clearProcessingSelection(
-    "Выберите сцену из нового результата поиска.",
-  );
+  if (state.analysisMode === "desertification") {
+    state.selectedLandScenes = [];
+    updateLandSelection();
+  } else {
+    clearProcessingSelection(
+      "Выберите сцену из нового результата поиска.",
+    );
+  }
 
   try {
     const result = await fetchJSON(apiUrl("/api/search"), {
@@ -504,7 +644,11 @@ async function handleSearch(event) {
       body: JSON.stringify(payload),
     });
 
-    state.scenes = result.scenes || [];
+    state.scenes = (result.scenes || []).filter(
+      (scene) =>
+        state.analysisMode !== "desertification" ||
+        scene.collection === "sentinel-2-l2a",
+    );
     renderScenes();
     elements.requestState.textContent = `Получено: ${state.scenes.length}`;
     elements.requestState.className = "request-state success";
@@ -519,14 +663,81 @@ async function handleSearch(event) {
   }
 }
 
-function setSearchLoading(isLoading) {
+async function handleStorageCheck() {
+  if (IS_STATIC_DEMO) {
+    showToast(
+      "Для проверки Object Storage подключите backend-сервер.",
+      true,
+    );
+    return;
+  }
+  if (!state.objectStorageConfigured) {
+    showToast("Object Storage не настроен на сервере.", true);
+    return;
+  }
+
+  setSearchLoading(true, "storage");
+  elements.resultsSourceLabel.textContent = "Object Storage";
+  setSearchResultsVisibility(false);
+  clearSceneOutlines();
+  if (state.analysisMode === "desertification") {
+    state.selectedLandScenes = [];
+    updateLandSelection();
+  } else {
+    clearProcessingSelection("Выберите SAFE из Object Storage.");
+  }
+
+  try {
+    const result = await fetchJSON(apiUrl("/api/storage/scenes"));
+    state.scenes = (result.scenes || []).filter(
+      (scene) =>
+        state.analysisMode !== "desertification" ||
+        scene.collection === "sentinel-2-l2a",
+    );
+    renderScenes();
+    if (state.scenes.length === 0) {
+      elements.emptyStateTitle.textContent =
+        "SAFE в Object Storage не найдены";
+      elements.emptyStateText.textContent =
+        "В каталоге incoming пока нет сохранённых SAFE-архивов.";
+    }
+    elements.requestState.textContent =
+      `В Storage: ${state.scenes.length}`;
+    elements.requestState.className = "request-state success";
+    elements.sceneCountNote.textContent =
+      state.scenes.length === 0
+        ? "SAFE в хранилище не найдены"
+        : `Бакет: ${result.bucket}`;
+    elements.activeSource.textContent = "Storage";
+    elements.activeSourceNote.textContent = "Сохранённые SAFE";
+  } catch (error) {
+    state.scenes = [];
+    renderScenes({ reveal: false });
+    elements.requestState.textContent = "Ошибка Storage";
+    elements.requestState.className = "request-state error";
+    showToast(error.message, true);
+  } finally {
+    setSearchLoading(false);
+  }
+}
+
+function setSearchLoading(isLoading, source = "") {
   elements.searchButton.disabled = isLoading;
-  elements.searchButton.querySelector("span").textContent = isLoading
-    ? "Поиск в каталоге…"
-    : "Найти снимки";
+  elements.storageButton.disabled = isLoading;
+  elements.searchButton.querySelector("span").textContent =
+    isLoading && source === "catalogue"
+      ? "Поиск в каталоге…"
+      : "Найти снимки";
+  elements.storageButton.querySelector("span").textContent =
+    isLoading && source === "storage"
+      ? "Чтение Storage…"
+      : "Проверить хранилище";
 
   if (isLoading) {
-    elements.requestState.textContent = "Запрос выполняется";
+    elements.requestState.textContent =
+      source === "storage"
+        ? "Проверка хранилища"
+        : "Запрос выполняется";
     elements.requestState.className = "request-state loading";
   }
 }
@@ -580,7 +791,9 @@ function renderScenes({ reveal = true } = {}) {
     row.appendChild(
       cellWithNote(
         formatDateTime(scene.datetime),
-        scene.orbit_direction
+        scene.storage_exists
+          ? "Источник: Object Storage"
+          : scene.orbit_direction
           ? `Орбита: ${translateOrbit(scene.orbit_direction)}`
           : "Направление орбиты не указано",
       ),
@@ -595,7 +808,9 @@ function renderScenes({ reveal = true } = {}) {
     const collection = document.createElement("span");
     collection.className = "cell-note";
     collection.textContent =
-      scene.download_product_type === "original-safe"
+      scene.storage_exists
+        ? `${scene.collection} · SAFE уже в Object Storage`
+        : scene.download_product_type === "original-safe"
         ? `${scene.collection} · SAFE обрабатывается временно на сервере`
         : scene.collection || "STAC";
     productCell.appendChild(collection);
@@ -632,11 +847,17 @@ function renderScenes({ reveal = true } = {}) {
     downloadButton.dataset.sceneIndex = String(index);
 
     let processButton = null;
-    if (scene.collection === "sentinel-1-grd") {
+    if (
+      scene.collection === "sentinel-1-grd" ||
+      (state.analysisMode === "desertification" &&
+        scene.collection === "sentinel-2-l2a")
+    ) {
       processButton = document.createElement("button");
       processButton.type = "button";
       processButton.className = "button process-scene-button";
-      processButton.textContent = "Обработать";
+      processButton.textContent = state.analysisMode === "desertification"
+        ? "В серию"
+        : "Обработать";
       processButton.disabled = true;
       processButton.hidden = true;
     }
@@ -653,11 +874,19 @@ function renderScenes({ reveal = true } = {}) {
     processButton?.addEventListener("click", (buttonEvent) => {
       buttonEvent.stopPropagation();
       showScene(scene, index, false);
-      selectSceneForProcessing(
-        scene,
-        processButton.dataset.filename || "",
-        processButton.dataset.storageKey || "",
-      );
+      if (state.analysisMode === "desertification") {
+        toggleLandScene(
+          scene,
+          processButton.dataset.storageKey || "",
+          processButton,
+        );
+      } else {
+        selectSceneForProcessing(
+          scene,
+          processButton.dataset.filename || "",
+          processButton.dataset.storageKey || "",
+        );
+      }
     });
 
     actionGroup.append(downloadButton);
@@ -667,9 +896,33 @@ function renderScenes({ reveal = true } = {}) {
     row.appendChild(actionCell);
 
     elements.sceneRows.appendChild(row);
-    sizeTasks.push({ scene, downloadMeta });
+    if (scene.storage_exists) {
+      markSceneStored(
+        scene,
+        downloadButton,
+        processButton,
+        downloadMeta,
+        {
+          filename:
+            scene.storage_key?.split("/").pop() || scene.name || "",
+          storageKey: scene.storage_key,
+          storageBucket: scene.storage_bucket,
+          sizeBytes:
+            scene.storage_size_bytes || scene.size_bytes || 0,
+          reused: true,
+        },
+      );
+    } else {
+      sizeTasks.push({
+        scene,
+        downloadMeta,
+        downloadButton,
+        processButton,
+      });
+    }
   });
 
+  syncLandSceneButtons();
   renderSceneOutlines();
   void loadDownloadSizes(sizeTasks, searchGeneration);
   setSearchResultsVisibility(reveal);
@@ -682,7 +935,7 @@ function scenePreviewCell(sceneGeometry, regionGeometry) {
   const preview = document.createElement("div");
   preview.className = "scene-preview";
   preview.title = sceneGeometry
-    ? "Контур покрытия сцены. Красным показан регион мониторинга."
+    ? "Контур покрытия сцены. Красным показана область анализа."
     : "Контур покрытия отсутствует в каталоге.";
 
   const sceneRings = geometryRings(sceneGeometry);
@@ -707,7 +960,7 @@ function scenePreviewCell(sceneGeometry, regionGeometry) {
 
   const title = document.createElementNS(svgNamespace, "title");
   title.textContent =
-    "Граница сцены; красным показан регион мониторинга";
+    "Граница сцены; красным показана область анализа";
   svg.appendChild(title);
 
   const projected = projectPreviewGeometries(sceneRings, regionRings);
@@ -867,11 +1120,29 @@ async function loadDownloadSizes(tasks, searchGeneration) {
 
         task.scene.downloadInfo = info;
         if (task.scene.downloadStarted) continue;
-        task.downloadMeta.textContent =
-          Number(info.size_bytes) > 0
-            ? `Размер: ${formatBytes(info.size_bytes)}`
-            : "Размер: нет данных";
+        const sizeBytes =
+          Number(info.storage_size_bytes) > 0
+            ? Number(info.storage_size_bytes)
+            : Number(info.size_bytes);
+        task.downloadMeta.textContent = Number(sizeBytes) > 0
+          ? `Размер: ${formatBytes(sizeBytes)}`
+          : "Размер: нет данных";
         task.downloadMeta.title = info.filename || "";
+        if (info.storage_exists) {
+          markSceneStored(
+            task.scene,
+            task.downloadButton,
+            task.processButton,
+            task.downloadMeta,
+            {
+              filename: info.filename,
+              storageKey: info.storage_key,
+              storageBucket: info.storage_bucket,
+              sizeBytes,
+              reused: true,
+            },
+          );
+        }
       } catch (error) {
         if (searchGeneration !== state.searchGeneration) return;
         if (task.scene.downloadStarted) continue;
@@ -882,6 +1153,72 @@ async function loadDownloadSizes(tasks, searchGeneration) {
   }
 
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
+}
+
+function markSceneStored(
+  scene,
+  downloadButton,
+  processButton,
+  downloadMeta,
+  {
+    filename = "",
+    storageKey = "",
+    storageBucket = "",
+    sizeBytes = 0,
+    reused = false,
+  } = {},
+) {
+  scene.storageReady = true;
+  scene.storage_key = storageKey || scene.storage_key || "";
+  downloadButton.className = "button download-button completed";
+  downloadButton.textContent = "В Storage";
+  downloadButton.title = storageKey || filename;
+  downloadButton.disabled = true;
+
+  if (Number(sizeBytes) > 0) {
+    downloadMeta.textContent =
+      `Размер: ${formatBytes(sizeBytes)} · в Storage`;
+  }
+  downloadMeta.title = storageKey
+    ? `${storageBucket}/${storageKey}`
+    : filename;
+
+  if (
+    scene.collection === "sentinel-1-grd" &&
+    processButton &&
+    storageKey
+  ) {
+    processButton.hidden = false;
+    processButton.disabled =
+      !state.snapAvailable || !state.objectStorageConfigured;
+    processButton.dataset.filename = filename || "";
+    processButton.dataset.storageKey = storageKey;
+    processButton.textContent = "Обработать";
+  }
+
+  if (
+    state.analysisMode === "desertification" &&
+    scene.collection === "sentinel-2-l2a" &&
+    processButton &&
+    storageKey
+  ) {
+    processButton.hidden = false;
+    processButton.disabled =
+      !state.objectStorageConfigured || !state.desertificationModelAvailable;
+    processButton.dataset.filename = filename || "";
+    processButton.dataset.storageKey = storageKey;
+    processButton.textContent = "В серию";
+  }
+
+  if (reused) {
+    scene.downloadInfo = {
+      ...(scene.downloadInfo || {}),
+      storage_exists: true,
+      storage_key: storageKey,
+      storage_bucket: storageBucket,
+      storage_size_bytes: sizeBytes,
+    };
+  }
 }
 
 function cellWithNote(mainText, noteText) {
@@ -1014,7 +1351,10 @@ async function startDownload(
   processButton,
   downloadMeta,
 ) {
-  if (!state.credentialsConfigured) {
+  if (
+    !state.credentialsConfigured &&
+    !state.objectStorageConfigured
+  ) {
     showToast(
       "Добавьте CDSE_USERNAME и CDSE_PASSWORD в .env и перезапустите приложение.",
       true,
@@ -1069,26 +1409,33 @@ async function pollDownload(
     updateDownloadProgress(job, button, downloadMeta);
 
     if (job.status === "completed") {
-      button.className = "button download-button completed";
-      button.textContent = "Скачано";
-      button.title = job.storage_key || job.filename || "";
-      button.disabled = true;
-      if (
-        scene.collection === "sentinel-1-grd" &&
-        job.storage_uploaded &&
-        processButton
-      ) {
-        processButton.hidden = false;
-        processButton.disabled =
-          !state.snapAvailable || !state.objectStorageConfigured;
-        processButton.dataset.filename = job.filename || "";
-        processButton.dataset.storageKey = job.storage_key || "";
-        processButton.textContent = "Обработать";
+      if (job.storage_uploaded) {
+        markSceneStored(
+          scene,
+          button,
+          processButton,
+          downloadMeta,
+          {
+            filename: job.filename,
+            storageKey: job.storage_key,
+            storageBucket: job.storage_bucket,
+            sizeBytes: job.total_bytes,
+            reused: Boolean(job.storage_reused),
+          },
+        );
+      } else {
+        button.className = "button download-button completed";
+        button.textContent = "Скачано";
+        button.title = job.filename || "";
+        button.disabled = true;
       }
-      showToast(job.storage_uploaded
-        ? `SAFE сохранён в ${job.storage_bucket}/${job.storage_key}. ` +
-          "Временная копия с ноутбука удалена."
-        : `SAFE сохранён локально в data/raw: ${job.filename}`);
+      showToast(job.storage_reused
+        ? `SAFE уже находится в ${job.storage_bucket}/${job.storage_key}. ` +
+          "Он будет получен из Storage при обработке."
+        : job.storage_uploaded
+          ? `SAFE сохранён в ${job.storage_bucket}/${job.storage_key}. ` +
+            "Временная копия с ноутбука удалена."
+          : `SAFE сохранён локально в data/raw: ${job.filename}`);
       return;
     }
 
@@ -1141,6 +1488,314 @@ function updateDownloadProgress(
       : totalBytes > 0
         ? "Загрузка…"
         : "Загрузка…";
+}
+
+function toggleLandScene(scene, storageKey, button = null) {
+  if (scene.collection !== "sentinel-2-l2a") {
+    showToast("GeoIntellect принимает только Sentinel-2 L2A.", true);
+    return;
+  }
+  if (!storageKey) {
+    showToast("Сначала сохраните Sentinel-2 SAFE в Object Storage.", true);
+    return;
+  }
+  const existingIndex = state.selectedLandScenes.findIndex(
+    (item) => item.storage_key === storageKey,
+  );
+  if (existingIndex >= 0) {
+    state.selectedLandScenes.splice(existingIndex, 1);
+  } else {
+    state.selectedLandScenes.push({
+      ...scene,
+      storage_key: storageKey,
+    });
+  }
+  button?.classList.toggle("scene-series-selected", existingIndex < 0);
+  if (button) {
+    button.textContent = existingIndex < 0 ? "Добавлено" : "В серию";
+  }
+  updateLandSelection();
+}
+
+function updateLandSelection() {
+  if (!elements.landSelectedCount) return;
+  const count = state.selectedLandScenes.length;
+  elements.landSelectedCount.textContent = `${count} ${pluralScenes(count)}`;
+  elements.landSelectedList.replaceChildren();
+  state.selectedLandScenes.forEach((scene) => {
+    const chip = document.createElement("span");
+    chip.className = "land-selected-chip";
+    const label = document.createElement("span");
+    label.textContent = `${formatCompactDate(scene.datetime)} · ${formatPlatform(scene.platform)}`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", "Удалить сцену из серии");
+    remove.addEventListener("click", () => {
+      const index = state.selectedLandScenes.findIndex(
+        (item) => item.storage_key === scene.storage_key,
+      );
+      if (index >= 0) state.selectedLandScenes.splice(index, 1);
+      updateLandSelection();
+      syncLandSceneButtons();
+    });
+    chip.append(label, remove);
+    elements.landSelectedList.appendChild(chip);
+  });
+
+  const ready =
+    count >= 2 &&
+    state.objectStorageConfigured &&
+    state.desertificationModelAvailable &&
+    !IS_STATIC_DEMO;
+  elements.processLandButton.disabled = !ready;
+  elements.landProcessingState.textContent = count === 0
+    ? "Ожидание серии"
+    : count < 2
+      ? "Нужна ещё одна сцена"
+      : ready
+        ? "Серия готова"
+        : "Проверьте сервер и Storage";
+  elements.landProcessingState.className = ready
+    ? "request-state success"
+    : "request-state";
+}
+
+function syncLandSceneButtons() {
+  for (const button of elements.sceneRows.querySelectorAll(
+    ".process-scene-button",
+  )) {
+    const selected = state.selectedLandScenes.some(
+      (scene) => scene.storage_key === button.dataset.storageKey,
+    );
+    button.classList.toggle("scene-series-selected", selected);
+    button.textContent = selected ? "Добавлено" : "В серию";
+  }
+}
+
+function pluralScenes(count) {
+  const value = Math.abs(Number(count)) % 100;
+  const last = value % 10;
+  if (value > 10 && value < 20) return "сцен";
+  if (last === 1) return "сцена";
+  if (last >= 2 && last <= 4) return "сцены";
+  return "сцен";
+}
+
+async function handleLandProcessing(event) {
+  event.preventDefault();
+  if (IS_STATIC_DEMO) {
+    showToast("Для реальной обработки подключите backend NatObserve.", true);
+    return;
+  }
+  if (!state.desertificationModelAvailable) {
+    showToast("Модель GeoIntellect не найдена на сервере.", true);
+    return;
+  }
+  if (state.selectedLandScenes.length < 2) {
+    showToast("Добавьте минимум две Sentinel-2 сцены из Storage.", true);
+    return;
+  }
+
+  let geometry;
+  try {
+    geometry = geometryFromMap();
+  } catch (error) {
+    showToast(error.message, true);
+    return;
+  }
+
+  const payload = {
+    geometry,
+    scenes: state.selectedLandScenes.map((scene) => ({
+      collection: "sentinel-2-l2a",
+      storage_key: scene.storage_key,
+      name: scene.name || scene.stac_item_id || "",
+      datetime: scene.datetime || "",
+      platform: scene.platform || "",
+    })),
+    bare_threshold: Number(elements.landBareThreshold.value),
+    min_trend_observations: Number(elements.landMinObservations.value),
+  };
+  setLandProcessingLoading(true, "Задание поставлено в очередь");
+  try {
+    const result = await fetchJSON(
+      apiUrl("/api/desertification/process/storage"),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+    );
+    await pollLandProcessing(result.job_id);
+  } catch (error) {
+    setLandProcessingLoading(false, "Ошибка обработки", true);
+    showToast(error.message, true);
+  }
+}
+
+async function pollLandProcessing(jobId) {
+  const startedAt = Date.now();
+  const maximumWait = 24 * 60 * 60 * 1000;
+  while (Date.now() - startedAt < maximumWait) {
+    await delay(2500);
+    let job;
+    try {
+      job = await fetchJSON(
+        apiUrl(`/api/process/status?id=${encodeURIComponent(jobId)}`),
+      );
+    } catch (error) {
+      setLandProcessingLoading(false, "Сервер недоступен", true);
+      showToast(error.message, true);
+      return;
+    }
+    elements.landProcessingState.textContent = job.message || "Обработка…";
+    elements.landProcessingState.className = "request-state loading";
+    const label = elements.processLandButton.querySelector("span");
+    label.textContent = job.phase === "storage-download"
+      ? `Получение SAFE — ${Math.round(Number(job.progress_percent) || 0)}%`
+      : job.phase === "extracting"
+        ? "Распаковка SAFE…"
+        : job.phase === "model"
+          ? "GeoIntellect выполняет модель…"
+          : job.phase === "storage"
+            ? "Сохранение результатов…"
+            : "Подготовка отчётов…";
+
+    if (job.status === "completed") {
+      renderLandProcessingResult(job.result || {});
+      setLandProcessingLoading(false, "Готово");
+      showToast("Анализ опустынивания завершён; временные SAFE удалены.");
+      return;
+    }
+    if (job.status === "failed") {
+      setLandProcessingLoading(false, "Ошибка обработки", true);
+      showToast(job.message || "Ошибка GeoIntellect.", true);
+      return;
+    }
+  }
+  setLandProcessingLoading(false, "Превышено время ожидания", true);
+}
+
+function setLandProcessingLoading(isLoading, message, isError = false) {
+  elements.processLandButton.disabled = isLoading;
+  elements.landBareThreshold.disabled = isLoading;
+  elements.landMinObservations.disabled = isLoading;
+  elements.landProcessingState.textContent = message;
+  elements.landProcessingState.className = isError
+    ? "request-state error"
+    : isLoading
+      ? "request-state loading"
+      : "request-state success";
+  elements.processLandButton.querySelector("span").textContent = isLoading
+    ? "Сервер выполняет задание…"
+    : "Запустить GeoIntellect";
+  if (!isLoading) updateLandSelection();
+}
+
+function renderLandProcessingResult(result) {
+  const metrics = result.metrics || {};
+  const series = Array.isArray(metrics.timeseries) ? metrics.timeseries : [];
+  elements.landDemoBanner.textContent =
+    `Реальный результат GeoIntellect · ${Number(metrics.scene_count) || 0} Sentinel-2 SAFE`;
+  elements.landDemoBanner.className = "demo-data-banner request-state success";
+  const years = series.map((item) => Number(item.year)).filter(Number.isFinite);
+  elements.landMetricPeriod.textContent = years.length
+    ? `${Math.min(...years)}–${Math.max(...years)}`
+    : "—";
+  elements.landMetricZones.textContent = String(
+    Number(metrics.problem_zone_count) || 0,
+  );
+  elements.landMetricStrong.textContent =
+    `${formatArea(metrics.strong_desertification_area_km2)} км²`;
+  elements.landMetricPriority.textContent = formatDecimal(
+    metrics.maximum_priority_score,
+    1,
+  );
+  elements.summaryConcentration.textContent = formatDecimal(
+    metrics.maximum_priority_score,
+    1,
+  );
+  elements.summaryConcentrationNote.textContent =
+    `${Number(metrics.problem_zone_count) || 0} проблемных зон`;
+  elements.landTrendCaption.textContent = "Результат реальной обработки Sentinel-2";
+  renderLandTrendChart(series);
+  elements.landResult.hidden = false;
+  elements.landResultWarning.textContent = result.warning || "";
+
+  const downloads = result.downloads || {};
+  setDownloadLink(elements.downloadDesertificationMap, downloads.desertification_geotiff);
+  setDownloadLink(elements.downloadPastureMap, downloads.pasture_geotiff);
+  setDownloadLink(elements.downloadProblemZones, downloads.problem_zones);
+  setDownloadLink(elements.downloadLandReport, downloads.report);
+  setDownloadLink(elements.downloadLandTimeseries, downloads.timeseries);
+  setDownloadLink(elements.downloadLandMetadata, downloads.metadata);
+  setDownloadLink(elements.downloadLandLog, downloads.model_log);
+  if (result.image_url && Array.isArray(result.bounds)) {
+    addResultOverlay(
+      { image_url: result.image_url, bounds: result.bounds },
+      { fit: true, persist: true },
+    );
+  }
+}
+
+function initialiseLandDemoDashboard() {
+  if (state.analysisMode !== "desertification") return;
+  renderLandTrendChart([
+    { year: 2020, ndvi: 0.272, ndmi: -0.062, bsi: 0.171 },
+    { year: 2021, ndvi: 0.264, ndmi: -0.07, bsi: 0.179 },
+    { year: 2022, ndvi: 0.256, ndmi: -0.077, bsi: 0.187 },
+    { year: 2023, ndvi: 0.248, ndmi: -0.084, bsi: 0.195 },
+    { year: 2024, ndvi: 0.241, ndmi: -0.091, bsi: 0.203 },
+    { year: 2025, ndvi: 0.232, ndmi: -0.098, bsi: 0.211 },
+  ]);
+}
+
+function renderLandTrendChart(series) {
+  elements.landTrendChart.replaceChildren();
+  if (!Array.isArray(series) || series.length === 0) return;
+  const width = 720;
+  const height = 150;
+  const padding = 12;
+  const minValue = -0.15;
+  const maxValue = 0.35;
+  const x = (index) => padding +
+    (index * (width - padding * 2)) / Math.max(series.length - 1, 1);
+  const y = (value) => padding +
+    ((maxValue - Number(value)) * (height - padding * 2)) /
+      (maxValue - minValue);
+  const svgNamespace = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNamespace, "svg");
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  const definitions = [
+    ["ndvi", "#20a45b"],
+    ["ndmi", "#1875d1"],
+    ["bsi", "#e98400"],
+  ];
+  for (const [key, color] of definitions) {
+    const line = document.createElementNS(svgNamespace, "polyline");
+    line.setAttribute(
+      "points",
+      series.map((item, index) => `${x(index)},${y(item[key])}`).join(" "),
+    );
+    line.setAttribute("fill", "none");
+    line.setAttribute("stroke", color);
+    line.setAttribute("stroke-width", "3");
+    line.setAttribute("stroke-linecap", "round");
+    line.setAttribute("stroke-linejoin", "round");
+    svg.appendChild(line);
+  }
+  elements.landTrendChart.appendChild(svg);
+}
+
+function formatDecimal(value, digits = 1) {
+  const number = Number(value);
+  return Number.isFinite(number)
+    ? number.toLocaleString("ru-RU", {
+        minimumFractionDigits: digits,
+        maximumFractionDigits: digits,
+      })
+    : "—";
 }
 
 function selectSceneForProcessing(scene, filename, storageKey) {
@@ -1236,7 +1891,6 @@ function clearProcessingSelection(note = "Сцена не выбрана") {
   elements.selectedProduct.title = "";
   elements.selectedProductNote.textContent = note;
   elements.processingPolarization.value = "AUTO";
-  clearResultOverlay();
   updateProcessButtonState();
 }
 
@@ -1278,7 +1932,6 @@ async function handleProcessing(event) {
 
   resetDeleteSourceState();
   setProcessingLoading(true, "Обработка поставлена в очередь");
-  clearResultOverlay();
 
   try {
     const result = await fetchJSON(apiUrl("/api/process/storage"), {
@@ -1409,6 +2062,7 @@ function resumeProcessingJob() {
 function setProcessingLoading(isLoading, message) {
   elements.processButton.disabled = isLoading;
   elements.deleteSourceButton.disabled = isLoading;
+  elements.clearMapResultsButton.disabled = isLoading;
   elements.processButton.querySelector("span").textContent = isLoading
     ? "Сервер выполняет задание…"
     : "Обработать сцену";
@@ -1425,6 +2079,7 @@ function setProcessingLoading(isLoading, message) {
   if (!isLoading) {
     updateProcessButtonState();
     updateDeleteSourceButtonState();
+    updateResultMapControls();
   }
 }
 
@@ -1543,14 +2198,13 @@ function renderProcessingResult(result) {
   setDownloadLink(elements.downloadSnapLog, downloads.snap_log);
 
   if (result.image_url && Array.isArray(result.bounds)) {
-    const imageUrl = `${backendUrl(result.image_url)}&v=${Date.now()}`;
-    state.resultLayer = L.imageOverlay(imageUrl, result.bounds, {
-      opacity: Number(elements.overlayOpacity.value),
-      interactive: false,
-      zIndex: 450,
-    }).addTo(state.map);
-    elements.mapOpacityControl.hidden = false;
-    state.map.fitBounds(result.bounds, { padding: [32, 32] });
+    addResultOverlay(
+      {
+        image_url: result.image_url,
+        bounds: result.bounds,
+      },
+      { fit: true, persist: true },
+    );
   }
 }
 
@@ -1559,18 +2213,121 @@ function setDownloadLink(element, href) {
   element.toggleAttribute("aria-disabled", !href);
 }
 
-function clearResultOverlay() {
-  if (state.resultLayer) {
-    state.map.removeLayer(state.resultLayer);
-    state.resultLayer = null;
+function addResultOverlay(record, { fit = false, persist = false } = {}) {
+  const imageUrl = String(record?.image_url || "");
+  const bounds = record?.bounds;
+  if (!imageUrl || !Array.isArray(bounds)) return;
+
+  const existing = state.resultLayers.find(
+    (item) => item.imageUrl === imageUrl,
+  );
+  if (existing) {
+    existing.layer.bringToFront();
+    fit && state.map.fitBounds(bounds, { padding: [32, 32] });
+    return;
   }
-  elements.mapOpacityControl.hidden = true;
+
+  const separator = imageUrl.includes("?") ? "&" : "?";
+  const layer = L.imageOverlay(
+    `${backendUrl(imageUrl)}${separator}v=${Date.now()}`,
+    bounds,
+    {
+      opacity: Number(elements.overlayOpacity.value),
+      interactive: false,
+      zIndex: 450 + state.resultLayers.length,
+    },
+  ).addTo(state.map);
+
+  state.resultLayers.push({ imageUrl, bounds, layer });
+  if (persist) {
+    state.resultOverlayRecords.push({
+      image_url: imageUrl,
+      bounds,
+    });
+    persistResultOverlays();
+  }
+  updateResultMapControls();
+  fit && state.map.fitBounds(bounds, { padding: [32, 32] });
 }
 
 function updateOverlayOpacity() {
-  if (state.resultLayer) {
-    state.resultLayer.setOpacity(Number(elements.overlayOpacity.value));
+  const opacity = Number(elements.overlayOpacity.value);
+  for (const item of state.resultLayers) {
+    item.layer.setOpacity(opacity);
   }
+}
+
+function updateResultMapControls() {
+  const hasResults = state.resultLayers.length > 0;
+  elements.mapOpacityControl.hidden = !hasResults;
+  elements.clearMapResultsButton.hidden = !hasResults;
+  if (hasResults) {
+    elements.clearMapResultsButton.disabled = false;
+  }
+}
+
+function persistResultOverlays() {
+  try {
+    localStorage.setItem(
+      RESULT_OVERLAYS_STORAGE_KEY,
+      JSON.stringify(state.resultOverlayRecords),
+    );
+  } catch {
+    // Слои продолжают работать до перезагрузки, если storage недоступен.
+  }
+}
+
+function restoreResultOverlays() {
+  let records = [];
+  try {
+    records = JSON.parse(
+      localStorage.getItem(RESULT_OVERLAYS_STORAGE_KEY) || "[]",
+    );
+  } catch {
+    records = [];
+  }
+  if (!Array.isArray(records)) return;
+
+  state.resultOverlayRecords = [];
+  for (const record of records) {
+    if (!record?.image_url || !Array.isArray(record.bounds)) continue;
+    state.resultOverlayRecords.push({
+      image_url: String(record.image_url),
+      bounds: record.bounds,
+    });
+    addResultOverlay(record);
+  }
+  if (state.resultOverlayRecords.length !== records.length) {
+    persistResultOverlays();
+  }
+}
+
+function clearProcessedMap() {
+  for (const item of state.resultLayers) {
+    state.map.removeLayer(item.layer);
+  }
+  state.resultLayers = [];
+  state.resultOverlayRecords = [];
+  try {
+    localStorage.removeItem(RESULT_OVERLAYS_STORAGE_KEY);
+  } catch {
+    // Очистка текущей карты не зависит от доступности localStorage.
+  }
+
+  updateResultMapControls();
+  clearProcessingSelection(
+    "Обработанные снимки удалены с карты. Выберите сцену заново.",
+  );
+  resetDeleteSourceState();
+  elements.processingEmpty.hidden = false;
+  elements.processingMetrics.hidden = true;
+  elements.processingState.textContent = "Ожидание сцены";
+  elements.processingState.className = "request-state";
+  elements.summaryConcentration.textContent = "—";
+  elements.summaryConcentrationNote.textContent =
+    "Обработайте Sentinel-1 GRD";
+  elements.processingPanel.hidden = true;
+  showToast("Обработанные снимки удалены с карты.");
 }
 
 function formatArea(value) {
@@ -1611,49 +2368,6 @@ function setDownloadFailed(button, message) {
   button.className = "button download-button failed";
   button.textContent = "Повторить";
   showToast(message, true);
-}
-
-async function handleGeoJSONFile(event) {
-  const [file] = event.target.files;
-  if (!file) {
-    return;
-  }
-
-  try {
-    const geojson = JSON.parse(await file.text());
-    setRegionGeoJSON(geojson);
-    elements.regionStatus.textContent = `${file.name} · EPSG:4326`;
-    showToast("Регион загружен.");
-  } catch (error) {
-    showToast(`Не удалось прочитать GeoJSON: ${error.message}`, true);
-  } finally {
-    event.target.value = "";
-  }
-}
-
-function saveRegion() {
-  try {
-    const geometry = geometryFromMap();
-    const feature = {
-      type: "Feature",
-      properties: {
-        name: "Регион мониторинга",
-        crs: "EPSG:4326",
-      },
-      geometry,
-    };
-    const blob = new Blob([JSON.stringify(feature, null, 2)], {
-      type: "application/geo+json",
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "monitoring_region.geojson";
-    link.click();
-    URL.revokeObjectURL(url);
-  } catch (error) {
-    showToast(error.message, true);
-  }
 }
 
 function translateOrbit(value) {
