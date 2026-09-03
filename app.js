@@ -34,6 +34,9 @@ const state = {
   analysisMode: "",
   desertificationModelAvailable: false,
   selectedLandScenes: [],
+  activeLandTile: "",
+  landTileSearchGeneration: 0,
+  landTileSearchController: null,
 };
 
 const elements = {};
@@ -376,6 +379,7 @@ function bindEvents() {
     "submit",
     handleLandProcessing,
   );
+  elements.landMinObservations.addEventListener("input", updateLandSelection);
 }
 
 function regionStyle() {
@@ -630,6 +634,7 @@ async function handleSearch(event) {
   setSearchResultsVisibility(false);
   clearSceneOutlines();
   if (state.analysisMode === "desertification") {
+    resetLandTileSearch();
     state.selectedLandScenes = [];
     updateLandSelection();
   } else {
@@ -682,6 +687,7 @@ async function handleStorageCheck() {
   setSearchResultsVisibility(false);
   clearSceneOutlines();
   if (state.analysisMode === "desertification") {
+    resetLandTileSearch();
     state.selectedLandScenes = [];
     updateLandSelection();
   } else {
@@ -1279,6 +1285,13 @@ function showScene(scene, index, fitBounds = false) {
   updateSelectedSceneRow();
   showOpticalScene(scene);
 
+  if (
+    state.analysisMode === "desertification" &&
+    scene.collection === "sentinel-2-l2a"
+  ) {
+    void searchLandTileDates(scene);
+  }
+
   const bounds = selectedLayer?.getBounds();
   if (fitBounds && bounds?.isValid()) {
     state.map.fitBounds(bounds, { padding: [36, 36] });
@@ -1512,6 +1525,15 @@ function toggleLandScene(scene, storageKey, button = null) {
   if (existingIndex >= 0) {
     state.selectedLandScenes.splice(existingIndex, 1);
   } else {
+    const selectedOtherTile = state.selectedLandScenes.some(
+      (item) => sentinel2SceneTile(item) !== sentinel2SceneTile(scene),
+    );
+    if (selectedOtherTile) {
+      state.selectedLandScenes = [];
+      showToast(
+        `Временная серия переключена на тайл ${sentinel2SceneTile(scene)}.`,
+      );
+    }
     state.selectedLandScenes.push({
       ...scene,
       storage_key: storageKey,
@@ -1526,6 +1548,188 @@ function toggleLandScene(scene, storageKey, button = null) {
   updateLandSelection();
 }
 
+function sentinel2SceneTile(scene) {
+  const explicitTile = String(scene.tile_id || "").toUpperCase();
+  const normalisedExplicit = explicitTile.match(/T?\d{2}[A-Z]{3}/)?.[0] || "";
+  if (normalisedExplicit) {
+    return normalisedExplicit.startsWith("T")
+      ? normalisedExplicit
+      : `T${normalisedExplicit}`;
+  }
+  const identity = [scene.name, scene.stac_item_id, scene.storage_key]
+    .filter(Boolean)
+    .join(" ")
+    .toUpperCase();
+  return identity.match(/T\d{2}[A-Z]{3}/)?.[0] || "";
+}
+
+function resetLandTileSearch() {
+  state.landTileSearchController?.abort();
+  state.landTileSearchController = null;
+  state.activeLandTile = "";
+  state.landTileSearchGeneration += 1;
+}
+
+function sceneIsStored(scene) {
+  return Boolean(
+    scene.storage_exists ||
+    scene.storageReady ||
+    scene.storage_key ||
+    scene.downloadInfo?.storage_exists,
+  );
+}
+
+function preferredSceneForDate(current, candidate) {
+  if (!current) return candidate;
+  if (sceneIsStored(candidate) !== sceneIsStored(current)) {
+    return sceneIsStored(candidate) ? candidate : current;
+  }
+  const currentCloud = Number(current.cloud_cover);
+  const candidateCloud = Number(candidate.cloud_cover);
+  if (Number.isFinite(candidateCloud) && !Number.isFinite(currentCloud)) {
+    return candidate;
+  }
+  if (
+    Number.isFinite(candidateCloud) &&
+    Number.isFinite(currentCloud) &&
+    candidateCloud < currentCloud
+  ) {
+    return candidate;
+  }
+  return current;
+}
+
+function tileScenesByDistinctDate(tile, anchorScene, candidates) {
+  const scenesByDate = new Map();
+  for (const scene of [anchorScene, ...candidates]) {
+    if (sentinel2SceneTile(scene) !== tile) continue;
+    const date = sentinel2SceneDate(scene);
+    if (!date) continue;
+    scenesByDate.set(
+      date,
+      preferredSceneForDate(scenesByDate.get(date), scene),
+    );
+  }
+  return [...scenesByDate.values()].sort((left, right) =>
+    String(right.datetime || "").localeCompare(String(left.datetime || "")),
+  );
+}
+
+async function searchLandTileDates(anchorScene) {
+  if (IS_STATIC_DEMO) return;
+  const tile = sentinel2SceneTile(anchorScene);
+  if (!tile || state.activeLandTile === tile) return;
+
+  state.landTileSearchController?.abort();
+  const controller = new AbortController();
+  state.landTileSearchController = controller;
+  state.activeLandTile = tile;
+  const generation = ++state.landTileSearchGeneration;
+  const previousScenes = state.scenes.slice();
+
+  elements.resultsSourceLabel.textContent = `Тайл ${tile} · поиск других дат`;
+  elements.requestState.textContent = `Ищем временной ряд ${tile}…`;
+  elements.requestState.className = "request-state loading";
+
+  let geometry = anchorScene.geometry;
+  if (!geometry) {
+    try {
+      geometry = geometryFromMap();
+    } catch {
+      state.activeLandTile = "";
+      return;
+    }
+  }
+
+  try {
+    const result = await fetchJSON(apiUrl("/api/search"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        collection: "sentinel-2-l2a",
+        date_from: elements.dateFrom.value,
+        date_to: elements.dateTo.value,
+        cloud_cover: Number(elements.cloudCover.value),
+        limit: Math.max(
+          3,
+          Math.min(100, Number(elements.resultLimit.value) || 30),
+        ),
+        geometry,
+        tile_id: tile,
+      }),
+    });
+    if (generation !== state.landTileSearchGeneration) return;
+
+    state.scenes = tileScenesByDistinctDate(tile, anchorScene, [
+      ...previousScenes,
+      ...(result.scenes || []),
+      ...state.selectedLandScenes,
+    ]);
+    renderScenes();
+    const dateCount = state.scenes.length;
+    elements.resultsSourceLabel.textContent = `Тайл ${tile} · разные даты`;
+    elements.requestState.textContent = `${tile}: ${dateCount} ${pluralDates(dateCount)}`;
+    elements.requestState.className = "request-state success";
+    if (dateCount < 2) {
+      showToast(
+        `Для ${tile} в выбранном диапазоне снимков за другие даты не найдено.`,
+        true,
+      );
+    }
+  } catch (error) {
+    if (error.name === "AbortError") return;
+    if (generation !== state.landTileSearchGeneration) return;
+    state.activeLandTile = "";
+    elements.resultsSourceLabel.textContent = "Каталог Copernicus";
+    elements.requestState.textContent = "Не удалось найти другие даты";
+    elements.requestState.className = "request-state error";
+    showToast(error.message, true);
+  } finally {
+    if (generation === state.landTileSearchGeneration) {
+      state.landTileSearchController = null;
+    }
+  }
+}
+
+function sentinel2SceneDate(scene) {
+  const datetime = String(scene.datetime || "");
+  const isoDate = datetime.match(/20\d{2}-\d{2}-\d{2}/)?.[0];
+  if (isoDate) return isoDate;
+  const identity = [scene.name, scene.stac_item_id, scene.storage_key]
+    .filter(Boolean)
+    .join(" ");
+  const compact = identity.match(/20\d{6}/)?.[0] || "";
+  return compact
+    ? `${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}`
+    : "";
+}
+
+function landTemporalCoverage() {
+  const required = Math.max(
+    3,
+    Math.min(60, Math.round(Number(elements.landMinObservations.value) || 6)),
+  );
+  const groups = new Map();
+  for (const scene of state.selectedLandScenes) {
+    const tile = sentinel2SceneTile(scene);
+    const date = sentinel2SceneDate(scene);
+    if (!tile || !date) continue;
+    if (!groups.has(tile)) groups.set(tile, new Set());
+    groups.get(tile).add(date);
+  }
+  const ranked = [...groups.entries()]
+    .map(([tile, dates]) => ({ tile, count: dates.size }))
+    .sort((left, right) => right.count - left.count || left.tile.localeCompare(right.tile));
+  return {
+    required,
+    best: ranked[0] || { tile: "", count: 0 },
+    qualifiedTiles: new Set(
+      ranked.filter((item) => item.count >= required).map((item) => item.tile),
+    ),
+  };
+}
+
 function updateLandSelection() {
   if (!elements.landSelectedCount) return;
   const count = state.selectedLandScenes.length;
@@ -1537,7 +1741,12 @@ function updateLandSelection() {
     const chip = document.createElement("span");
     chip.className = "land-selected-chip";
     const label = document.createElement("span");
-    label.textContent = `${formatCompactDate(scene.datetime)} · ${formatPlatform(scene.platform)}`;
+    const tile = sentinel2SceneTile(scene);
+    label.textContent = [
+      formatCompactDate(scene.datetime),
+      formatPlatform(scene.platform),
+      tile,
+    ].filter(Boolean).join(" · ");
     const remove = document.createElement("button");
     remove.type = "button";
     remove.textContent = "×";
@@ -1554,16 +1763,17 @@ function updateLandSelection() {
     elements.landSelectedList.appendChild(chip);
   });
 
+  const coverage = landTemporalCoverage();
   const ready =
-    count >= 2 &&
+    coverage.qualifiedTiles.size > 0 &&
     state.objectStorageConfigured &&
     state.desertificationModelAvailable &&
     !IS_STATIC_DEMO;
   elements.processLandButton.disabled = !ready;
   elements.landProcessingState.textContent = count === 0
-    ? "Выберите минимум 2 сцены"
-    : count < 2
-      ? "Выберите ещё одну сцену"
+    ? `Выберите ${coverage.required} сцен одного тайла`
+    : coverage.qualifiedTiles.size === 0
+      ? `${coverage.best.tile || "Один тайл"}: ${coverage.best.count}/${coverage.required} дат`
       : ready
         ? "Можно запускать обработку"
         : "Обработка недоступна: проверьте сервер и хранилище";
@@ -1593,6 +1803,15 @@ function pluralScenes(count) {
   return "сцен";
 }
 
+function pluralDates(count) {
+  const value = Math.abs(Number(count)) % 100;
+  const last = value % 10;
+  if (value > 10 && value < 20) return "дат";
+  if (last === 1) return "дата";
+  if (last >= 2 && last <= 4) return "даты";
+  return "дат";
+}
+
 async function handleLandProcessing(event) {
   event.preventDefault();
   if (IS_STATIC_DEMO) {
@@ -1603,8 +1822,12 @@ async function handleLandProcessing(event) {
     showToast("Модель GeoIntellect не найдена на сервере.", true);
     return;
   }
-  if (state.selectedLandScenes.length < 2) {
-    showToast("Добавьте минимум две Sentinel-2 сцены из Storage.", true);
+  const coverage = landTemporalCoverage();
+  if (coverage.qualifiedTiles.size === 0) {
+    showToast(
+      `Выберите минимум ${coverage.required} снимков одного тайла Sentinel-2 за разные даты.`,
+      true,
+    );
     return;
   }
 
@@ -1618,13 +1841,15 @@ async function handleLandProcessing(event) {
 
   const payload = {
     geometry,
-    scenes: state.selectedLandScenes.map((scene) => ({
+    scenes: state.selectedLandScenes
+      .filter((scene) => coverage.qualifiedTiles.has(sentinel2SceneTile(scene)))
+      .map((scene) => ({
       collection: "sentinel-2-l2a",
       storage_key: scene.storage_key,
       name: scene.name || scene.stac_item_id || "",
       datetime: scene.datetime || "",
       platform: scene.platform || "",
-    })),
+      })),
     bare_threshold: Number(elements.landBareThreshold.value),
     min_trend_observations: Number(elements.landMinObservations.value),
   };

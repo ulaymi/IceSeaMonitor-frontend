@@ -590,8 +590,8 @@
               <strong id="landSelectedCount">Выбрано 0 сцен</strong>
               <small>
                 Добавьте подготовленные снимки кнопкой «Добавить к обработке».
-                Для анализа нужны минимум две сцены, для устойчивого тренда —
-                не менее шести дат.
+                Для анализа нужны минимум три разные даты одного тайла;
+                для устойчивого тренда рекомендуется не менее шести дат.
               </small>
               <div class="land-selected-list" id="landSelectedList"></div>
             </div>
@@ -602,7 +602,7 @@
               </label>
               <label class="field">
                 <span>Минимальное число наблюдений</span>
-                <input id="landMinObservations" type="number" value="6" min="2" max="60" step="1" />
+                <input id="landMinObservations" type="number" value="6" min="3" max="60" step="1" />
               </label>
             </div>
             <button class="button primary search-button" id="processLandButton" type="submit" disabled>
