@@ -1418,7 +1418,7 @@ tbody tr:hover {
   border-radius: 0 0 20px 20px;
 }
 
-.map-panel:has(~ .processing-panel:not([hidden])) {
+.map-panel:has(~ #processingPanel:not([hidden])) {
   border-radius: 20px 20px 0 0;
 }
 
@@ -1774,8 +1774,53 @@ tbody tr:hover {
 }
 
 .land-controls {
+  display: flex;
+  flex-direction: column;
   padding: 26px;
+  gap: 18px;
   border-right: 1px solid var(--line);
+}
+
+.land-controls .selected-scene {
+  height: auto;
+  min-height: 0;
+  justify-content: flex-start;
+}
+
+.land-controls .selected-scene strong,
+.land-controls .selected-scene small {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.land-controls .selected-scene strong {
+  font-family: inherit;
+  font-size: 14px;
+}
+
+.land-controls .selected-scene small {
+  line-height: 1.5;
+}
+
+.land-controls .processing-fields {
+  width: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.land-controls .processing-fields .field > span {
+  min-height: 36px;
+  white-space: normal;
+}
+
+.land-controls > .search-button {
+  width: 100%;
+  min-height: 48px;
+}
+
+.land-controls .processing-help {
+  line-height: 1.5;
+  white-space: normal;
 }
 
 .land-selected-list {
@@ -1798,6 +1843,7 @@ tbody tr:hover {
   color: var(--accent);
   font-size: 9px;
   font-weight: 700;
+  white-space: normal;
 }
 
 .land-selected-chip button {

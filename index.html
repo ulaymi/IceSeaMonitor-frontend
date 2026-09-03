@@ -578,7 +578,7 @@
         <div class="results-heading">
           <div>
             <span class="eyebrow">GeoIntellect · Sentinel‑2 L2A</span>
-            <h2>Оценка опустынивания</h2>
+            <h2>Анализ опустынивания земель</h2>
           </div>
           <div class="request-state" id="landProcessingState">Ожидание серии</div>
         </div>
@@ -586,26 +586,27 @@
         <div class="land-processing-layout">
           <form class="land-controls" id="landProcessingForm">
             <div class="selected-scene">
-              <span class="field-title">Выбранная временная серия</span>
-              <strong id="landSelectedCount">0 сцен</strong>
+              <span class="field-title">Сцены для обработки</span>
+              <strong id="landSelectedCount">Выбрано 0 сцен</strong>
               <small>
-                Добавьте Sentinel‑2 SAFE из таблицы. Для устойчивого тренда
-                рекомендуется не менее шести дат.
+                Добавьте подготовленные снимки кнопкой «Добавить к обработке».
+                Для анализа нужны минимум две сцены, для устойчивого тренда —
+                не менее шести дат.
               </small>
               <div class="land-selected-list" id="landSelectedList"></div>
             </div>
             <div class="field-grid processing-fields">
               <label class="field">
-                <span>Порог голой почвы BSI</span>
+                <span>Порог индекса голой почвы (BSI)</span>
                 <input id="landBareThreshold" type="number" value="0.17" min="-1" max="1" step="0.01" />
               </label>
               <label class="field">
-                <span>Минимум наблюдений</span>
+                <span>Минимальное число наблюдений</span>
                 <input id="landMinObservations" type="number" value="6" min="2" max="60" step="1" />
               </label>
             </div>
             <button class="button primary search-button" id="processLandButton" type="submit" disabled>
-              <span>Запустить GeoIntellect</span>
+              <span>Обработать выбранные сцены</span>
             </button>
             <p class="processing-help">
               ETL читает B02/B03/B04/B08/B11/B12 и SCL, строит NDVI, NDMI,

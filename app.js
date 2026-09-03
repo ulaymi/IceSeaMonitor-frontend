@@ -211,7 +211,8 @@ function initialiseMode() {
   elements.summaryConcentrationNote.textContent = isLand
     ? "Запустите GeoIntellect"
     : "Обработайте Sentinel-1 GRD";
-  elements.landProcessingPanel.hidden = !isLand;
+  // До первого поиска режим опустынивания показывает только форму и карту.
+  elements.landProcessingPanel.hidden = true;
   if (isLand) {
     elements.collection.value = "sentinel-2-l2a";
     elements.collection.disabled = true;
@@ -745,6 +746,9 @@ function setSearchLoading(isLoading, source = "") {
 function setSearchResultsVisibility(visible) {
   elements.summaryGrid.hidden = !visible;
   elements.resultsPanel.hidden = !visible;
+  if (state.analysisMode === "desertification") {
+    elements.landProcessingPanel.hidden = !visible;
+  }
 }
 
 function renderScenes({ reveal = true } = {}) {
@@ -807,19 +811,22 @@ function renderScenes({ reveal = true } = {}) {
     productCell.appendChild(productName);
     const collection = document.createElement("span");
     collection.className = "cell-note";
+    const collectionLabel = formatCollection(scene.collection);
     collection.textContent =
       scene.storage_exists
-        ? `${scene.collection} · SAFE уже в Object Storage`
+        ? `${collectionLabel} · исходные данные уже в хранилище`
         : scene.download_product_type === "original-safe"
-        ? `${scene.collection} · SAFE обрабатывается временно на сервере`
-        : scene.collection || "STAC";
+        ? `${collectionLabel} · временная обработка на сервере`
+        : collectionLabel;
     productCell.appendChild(collection);
     row.appendChild(productCell);
 
     row.appendChild(
       cellWithNote(
         formatPlatform(scene.platform),
-        scene.polarizations?.length
+        scene.collection === "sentinel-2-l2a"
+          ? "Оптические данные уровня L2A"
+          : scene.polarizations?.length
           ? `Поляризация: ${scene.polarizations.join(" / ")}`
           : "Поляризация не указана",
       ),
@@ -856,7 +863,7 @@ function renderScenes({ reveal = true } = {}) {
       processButton.type = "button";
       processButton.className = "button process-scene-button";
       processButton.textContent = state.analysisMode === "desertification"
-        ? "В серию"
+        ? "Добавить к обработке"
         : "Обработать";
       processButton.disabled = true;
       processButton.hidden = true;
@@ -1207,7 +1214,7 @@ function markSceneStored(
       !state.objectStorageConfigured || !state.desertificationModelAvailable;
     processButton.dataset.filename = filename || "";
     processButton.dataset.storageKey = storageKey;
-    processButton.textContent = "В серию";
+    processButton.textContent = "Добавить к обработке";
   }
 
   if (reused) {
@@ -1512,7 +1519,9 @@ function toggleLandScene(scene, storageKey, button = null) {
   }
   button?.classList.toggle("scene-series-selected", existingIndex < 0);
   if (button) {
-    button.textContent = existingIndex < 0 ? "Добавлено" : "В серию";
+    button.textContent = existingIndex < 0
+      ? "Выбрано"
+      : "Добавить к обработке";
   }
   updateLandSelection();
 }
@@ -1520,7 +1529,9 @@ function toggleLandScene(scene, storageKey, button = null) {
 function updateLandSelection() {
   if (!elements.landSelectedCount) return;
   const count = state.selectedLandScenes.length;
-  elements.landSelectedCount.textContent = `${count} ${pluralScenes(count)}`;
+  elements.landSelectedCount.textContent = count === 1
+    ? "Выбрана 1 сцена"
+    : `Выбрано ${count} ${pluralScenes(count)}`;
   elements.landSelectedList.replaceChildren();
   state.selectedLandScenes.forEach((scene) => {
     const chip = document.createElement("span");
@@ -1550,12 +1561,12 @@ function updateLandSelection() {
     !IS_STATIC_DEMO;
   elements.processLandButton.disabled = !ready;
   elements.landProcessingState.textContent = count === 0
-    ? "Ожидание серии"
+    ? "Выберите минимум 2 сцены"
     : count < 2
-      ? "Нужна ещё одна сцена"
+      ? "Выберите ещё одну сцену"
       : ready
-        ? "Серия готова"
-        : "Проверьте сервер и Storage";
+        ? "Можно запускать обработку"
+        : "Обработка недоступна: проверьте сервер и хранилище";
   elements.landProcessingState.className = ready
     ? "request-state success"
     : "request-state";
@@ -1569,7 +1580,7 @@ function syncLandSceneButtons() {
       (scene) => scene.storage_key === button.dataset.storageKey,
     );
     button.classList.toggle("scene-series-selected", selected);
-    button.textContent = selected ? "Добавлено" : "В серию";
+    button.textContent = selected ? "Выбрано" : "Добавить к обработке";
   }
 }
 
@@ -1689,7 +1700,7 @@ function setLandProcessingLoading(isLoading, message, isError = false) {
       : "request-state success";
   elements.processLandButton.querySelector("span").textContent = isLoading
     ? "Сервер выполняет задание…"
-    : "Запустить GeoIntellect";
+    : "Обработать выбранные сцены";
   if (!isLoading) updateLandSelection();
 }
 
@@ -2379,9 +2390,24 @@ function translateOrbit(value) {
 
 function formatPlatform(value) {
   if (!value) return "Не указан";
-  return String(value)
-    .replace("sentinel-", "Sentinel-")
-    .replace("sentinel_", "Sentinel-");
+  const normalised = String(value).trim().toLowerCase().replaceAll("_", "-");
+  const knownPlatforms = {
+    "sentinel-1a": "Sentinel‑1A",
+    "sentinel-1b": "Sentinel‑1B",
+    "sentinel-1c": "Sentinel‑1C",
+    "sentinel-2a": "Sentinel‑2A",
+    "sentinel-2b": "Sentinel‑2B",
+    "sentinel-2c": "Sentinel‑2C",
+  };
+  return knownPlatforms[normalised] || String(value);
+}
+
+function formatCollection(value) {
+  const labels = {
+    "sentinel-1-grd": "Sentinel‑1 GRD",
+    "sentinel-2-l2a": "Sentinel‑2 L2A",
+  };
+  return labels[value] || value || "Каталог STAC";
 }
 
 function formatDateTime(value) {
