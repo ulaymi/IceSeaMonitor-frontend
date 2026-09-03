@@ -277,8 +277,8 @@ function formatDateInput(date) {
 function initialiseMap() {
   const isLand = state.analysisMode === "desertification";
   state.map = L.map("map", {
-    center: isLand ? [46.94, 45.03] : [75.2, 34],
-    zoom: isLand ? 11 : 4,
+    center: isLand ? [46.45, 45.1] : [75.2, 34],
+    zoom: isLand ? 6 : 4,
     minZoom: 2,
     zoomControl: true,
   });
