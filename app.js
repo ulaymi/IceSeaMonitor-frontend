@@ -57,7 +57,7 @@ async function initialise() {
   initialiseMap();
   bindEvents();
   updateSourceControls();
-  initialiseLandDemoDashboard();
+  initialiseLandDashboard();
 
   await Promise.all([loadDefaultRegion(), loadServerConfig()]);
   await loadCachedSceneTimeline();
@@ -153,6 +153,7 @@ function cacheElements() {
     "landProcessingPanel",
     "landProcessingForm",
     "landProcessingState",
+    "landStatistics",
     "landSelectedCount",
     "landSelectedList",
     "landBareThreshold",
@@ -2344,6 +2345,7 @@ function setLandProcessingLoading(isLoading, message, isError = false) {
 function renderLandProcessingResult(result) {
   const metrics = result.metrics || {};
   const series = Array.isArray(metrics.timeseries) ? metrics.timeseries : [];
+  elements.landStatistics.hidden = false;
   elements.landDemoBanner.textContent =
     `Реальный результат GeoIntellect · ${Number(metrics.scene_count) || 0} Sentinel-2 SAFE` +
     (metrics.statistics_provisional ? " · предварительная статистика" : "");
@@ -2363,6 +2365,9 @@ function renderLandProcessingResult(result) {
     ? formatDecimal(metrics.maximum_priority_score, 1)
     : "—";
   elements.landMetricPriority.textContent = priorityText;
+  for (const label of elements.landStatistics.querySelectorAll(".land-metric-grid small")) {
+    label.textContent = metrics.statistics_provisional ? "предварительно" : "по данным модели";
+  }
   elements.summaryConcentration.textContent = priorityText;
   elements.summaryConcentrationNote.textContent =
     metrics.priority_score_available
@@ -2413,16 +2418,10 @@ async function restoreLandProcessingResult() {
   }
 }
 
-function initialiseLandDemoDashboard() {
+function initialiseLandDashboard() {
   if (state.analysisMode !== "desertification") return;
-  renderLandTrendChart([
-    { year: 2020, ndvi: 0.272, ndmi: -0.062, bsi: 0.171 },
-    { year: 2021, ndvi: 0.264, ndmi: -0.07, bsi: 0.179 },
-    { year: 2022, ndvi: 0.256, ndmi: -0.077, bsi: 0.187 },
-    { year: 2023, ndvi: 0.248, ndmi: -0.084, bsi: 0.195 },
-    { year: 2024, ndvi: 0.241, ndmi: -0.091, bsi: 0.203 },
-    { year: 2025, ndvi: 0.232, ndmi: -0.098, bsi: 0.211 },
-  ]);
+  elements.landStatistics.hidden = true;
+  elements.landTrendChart.replaceChildren();
 }
 
 function renderLandTrendChart(series) {

@@ -39,7 +39,7 @@
       rel="stylesheet"
       href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css"
     />
-    <link rel="stylesheet" href="styles.css?v=0.3.5" />
+    <link rel="stylesheet" href="styles.css?v=0.3.6" />
   </head>
 
   <body>
@@ -656,21 +656,18 @@
             </p>
           </form>
 
-          <div class="land-dashboard">
-            <div class="demo-data-banner" id="landDemoBanner">
-              Демонстрационная сводка структуры отчёта GeoIntellect. На карту
-              демонстрационные данные не добавляются.
-            </div>
+          <div class="land-dashboard" id="landStatistics" hidden>
+            <div class="demo-data-banner" id="landDemoBanner"></div>
             <div class="land-metric-grid">
-              <article><span>Период наблюдений</span><strong id="landMetricPeriod">2020–2025</strong><small>демо</small></article>
-              <article><span>Проблемные зоны</span><strong id="landMetricZones">2</strong><small>демо</small></article>
-              <article><span>Сильное опустынивание</span><strong id="landMetricStrong">8,20 км²</strong><small>демо</small></article>
-              <article><span>Макс. приоритет</span><strong id="landMetricPriority">86,8</strong><small>демо</small></article>
+              <article><span>Период наблюдений</span><strong id="landMetricPeriod">—</strong><small></small></article>
+              <article><span>Проблемные зоны</span><strong id="landMetricZones">—</strong><small></small></article>
+              <article><span>Сильное опустынивание</span><strong id="landMetricStrong">—</strong><small></small></article>
+              <article><span>Макс. приоритет</span><strong id="landMetricPriority">—</strong><small></small></article>
             </div>
             <div class="land-trend-card">
               <div>
                 <span class="field-title">Динамика индексов проблемной зоны №1</span>
-                <small id="landTrendCaption">Демо · нормированные значения 2020–2025</small>
+                <small id="landTrendCaption"></small>
               </div>
               <div class="land-trend-chart" id="landTrendChart" aria-label="График динамики NDVI, NDMI и BSI"></div>
               <div class="land-chart-legend">
@@ -711,6 +708,6 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
-    <script src="app.js?v=0.3.4"></script>
+    <script src="app.js?v=0.3.6"></script>
   </body>
 </html>
