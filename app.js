@@ -2369,9 +2369,12 @@ function renderLandProcessingResult(result) {
       ? `${Number(metrics.problem_zone_count) || 0} проблемных зон` +
         (metrics.temporal_validation_passed ? "" : " · предварительно")
       : "Проблемные зоны не выделены";
-  elements.landTrendCaption.textContent = metrics.trend_available
-    ? "Динамика индексов проблемной зоны №1"
-    : "Наблюдения проблемной зоны №1 · для многолетнего тренда нужны разные годы";
+  const usesControlZone = metrics.timeseries_source === "pasture";
+  elements.landTrendCaption.textContent = usesControlZone
+    ? "Динамика индексов контрольной зоны открытой почвы"
+    : metrics.trend_available
+      ? "Динамика индексов проблемной зоны №1"
+      : "Наблюдения проблемной зоны №1 · для многолетнего тренда нужны разные годы";
   renderLandTrendChart(series);
   elements.landResult.hidden = false;
   elements.landResultWarning.textContent = result.warning || "";
