@@ -62,6 +62,7 @@ async function initialise() {
   await Promise.all([loadDefaultRegion(), loadServerConfig()]);
   await loadCachedSceneTimeline();
   restoreResultOverlays();
+  await restoreLandProcessingResult();
   resumeProcessingJob();
 }
 
@@ -75,6 +76,7 @@ function cacheElements() {
     "productSubtitle",
     "footerContext",
     "mapTitle",
+    "mapClassLegend",
     "regionLegendLabel",
     "scenesLegendLabel",
     "selectedLegendLabel",
@@ -228,6 +230,7 @@ function initialiseMode() {
   elements.summaryConcentrationNote.textContent = isLand
     ? "Запустите GeoIntellect"
     : "Обработайте Sentinel-1 GRD";
+  elements.mapClassLegend.hidden = !isLand;
   // До первого поиска режим опустынивания показывает только форму и карту.
   elements.landProcessingPanel.hidden = true;
   if (isLand) {
@@ -2386,6 +2389,24 @@ function renderLandProcessingResult(result) {
       { image_url: result.image_url, bounds: result.bounds },
       { fit: true, persist: true },
     );
+  }
+}
+
+async function restoreLandProcessingResult() {
+  if (IS_STATIC_DEMO || state.analysisMode !== "desertification") return;
+  const record = [...state.resultOverlayRecords].reverse().find(
+    (item) => String(item.image_url || "").includes("kind=overlay"),
+  );
+  const jobId = String(record?.image_url || "").match(/[?&]id=([0-9a-fA-F-]{20,64})/)?.[1];
+  if (!jobId) return;
+  try {
+    const result = await fetchJSON(
+      apiUrl(`/api/desertification/result?id=${encodeURIComponent(jobId)}`),
+    );
+    elements.landProcessingPanel.hidden = false;
+    renderLandProcessingResult(result);
+  } catch {
+    // Карта остаётся доступной, даже если старый отчёт уже удалён с сервера.
   }
 }
 

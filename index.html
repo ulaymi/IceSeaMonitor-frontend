@@ -39,7 +39,7 @@
       rel="stylesheet"
       href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css"
     />
-    <link rel="stylesheet" href="styles.css?v=0.3.3" />
+    <link rel="stylesheet" href="styles.css?v=0.3.4" />
   </head>
 
   <body>
@@ -265,6 +265,14 @@
             </span>
           </div>
         </div>
+
+        <aside class="map-class-legend" id="mapClassLegend" hidden aria-label="Классы состояния земель">
+          <strong>Классы состояния земель</strong>
+          <span><i class="class-stable"></i>Стабильные территории</span>
+          <span><i class="class-weak"></i>Слабое опустынивание</span>
+          <span><i class="class-strong"></i>Сильное опустынивание</span>
+          <span><i class="class-recovery"></i>Восстановление</span>
+        </aside>
 
         <div id="map" aria-label="Карта области наблюдения"></div>
 
@@ -703,6 +711,6 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
-    <script src="app.js?v=0.3.3"></script>
+    <script src="app.js?v=0.3.4"></script>
   </body>
 </html>
