@@ -29,14 +29,17 @@ const state = {
   selectedProcessingStorageKey: "",
   resultLayers: [],
   resultOverlayRecords: [],
+  pendingResultOverlays: new Set(),
   toastTimer: null,
   searchGeneration: 0,
   analysisMode: "",
   desertificationModelAvailable: false,
   selectedLandScenes: [],
+  landCatalogueScenes: [],
   activeLandTile: "",
   landTileSearchGeneration: 0,
   landTileSearchController: null,
+  safeCache: null,
 };
 
 const elements = {};
@@ -90,6 +93,7 @@ function cacheElements() {
     "resultLimit",
     "searchButton",
     "storageButton",
+    "backToTilesButton",
     "mapOpacityControl",
     "resultsSourceLabel",
     "summaryGrid",
@@ -365,6 +369,7 @@ function bindEvents() {
   elements.collection.addEventListener("change", updateSourceControls);
   elements.searchForm.addEventListener("submit", handleSearch);
   elements.storageButton.addEventListener("click", handleStorageCheck);
+  elements.backToTilesButton.addEventListener("click", showLandTileGroups);
   elements.processingForm.addEventListener("submit", handleProcessing);
   elements.deleteSourceButton.addEventListener(
     "click",
@@ -449,6 +454,7 @@ async function loadServerConfig() {
     state.desertificationModelAvailable = Boolean(
       config.desertification_model_available,
     );
+    state.safeCache = config.safe_cache || null;
     elements.credentialStatus.textContent = state.credentialsConfigured
       ? "CDSE: загрузка настроена"
       : "CDSE: добавьте данные в .env";
@@ -459,9 +465,12 @@ async function loadServerConfig() {
       : state.snapAvailable
         ? "SNAP: готов"
         : "SNAP: задайте путь в .env";
-    elements.storageStatus.textContent = state.objectStorageConfigured
-      ? `Storage: ${config.object_storage_bucket}`
-      : "Storage: добавьте ключи в .env";
+    elements.storageStatus.textContent = state.safeCache
+      ? `SAFE на сервере: ${formatBytes(state.safeCache.used_bytes)} из ${formatBytes(state.safeCache.limit_bytes)}`
+      : "SAFE-кэш: проверка недоступна";
+    elements.storageStatus.title = state.objectStorageConfigured
+      ? `Архив: ${config.object_storage_bucket}`
+      : "Object Storage не настроен";
     updateProcessButtonState();
     updateLandSelection();
   } catch (error) {
@@ -635,6 +644,7 @@ async function handleSearch(event) {
   clearSceneOutlines();
   if (state.analysisMode === "desertification") {
     resetLandTileSearch();
+    state.landCatalogueScenes = [];
     state.selectedLandScenes = [];
     updateLandSelection();
   } else {
@@ -655,8 +665,14 @@ async function handleSearch(event) {
         state.analysisMode !== "desertification" ||
         scene.collection === "sentinel-2-l2a",
     );
+    if (state.analysisMode === "desertification") {
+      state.landCatalogueScenes = state.scenes.slice();
+    }
     renderScenes();
-    elements.requestState.textContent = `Получено: ${state.scenes.length}`;
+    const tileCount = new Set(state.scenes.map(sentinel2SceneTile).filter(Boolean)).size;
+    elements.requestState.textContent = state.analysisMode === "desertification"
+      ? `Получено: ${tileCount} тайлов · ${state.scenes.length} сцен`
+      : `Получено: ${state.scenes.length}`;
     elements.requestState.className = "request-state success";
   } catch (error) {
     state.scenes = [];
@@ -672,18 +688,13 @@ async function handleSearch(event) {
 async function handleStorageCheck() {
   if (IS_STATIC_DEMO) {
     showToast(
-      "Для проверки Object Storage подключите backend-сервер.",
+      "Для просмотра локального SAFE-кэша подключите backend-сервер.",
       true,
     );
     return;
   }
-  if (!state.objectStorageConfigured) {
-    showToast("Object Storage не настроен на сервере.", true);
-    return;
-  }
-
   setSearchLoading(true, "storage");
-  elements.resultsSourceLabel.textContent = "Object Storage";
+  elements.resultsSourceLabel.textContent = "SAFE на сервере";
   setSearchResultsVisibility(false);
   clearSceneOutlines();
   if (state.analysisMode === "desertification") {
@@ -691,36 +702,41 @@ async function handleStorageCheck() {
     state.selectedLandScenes = [];
     updateLandSelection();
   } else {
-    clearProcessingSelection("Выберите SAFE из Object Storage.");
+    clearProcessingSelection("Выберите SAFE из локального кэша сервера.");
   }
 
   try {
-    const result = await fetchJSON(apiUrl("/api/storage/scenes"));
+    const result = await fetchJSON(apiUrl("/api/cache/scenes"));
     state.scenes = (result.scenes || []).filter(
       (scene) =>
         state.analysisMode !== "desertification" ||
         scene.collection === "sentinel-2-l2a",
     );
+    if (state.analysisMode === "desertification") {
+      state.landCatalogueScenes = state.scenes.slice();
+    }
     renderScenes();
     if (state.scenes.length === 0) {
       elements.emptyStateTitle.textContent =
-        "SAFE в Object Storage не найдены";
+        "SAFE на сервере не найдены";
       elements.emptyStateText.textContent =
-        "В каталоге incoming пока нет сохранённых SAFE-архивов.";
+        "Локальный SAFE-кэш пока пуст.";
     }
-    elements.requestState.textContent =
-      `В Storage: ${state.scenes.length}`;
+    const tileCount = new Set(state.scenes.map(sentinel2SceneTile).filter(Boolean)).size;
+    elements.requestState.textContent = state.analysisMode === "desertification"
+      ? `На сервере: ${tileCount} тайлов · ${state.scenes.length} сцен`
+      : `На сервере: ${state.scenes.length}`;
     elements.requestState.className = "request-state success";
     elements.sceneCountNote.textContent =
       state.scenes.length === 0
-        ? "SAFE в хранилище не найдены"
-        : `Бакет: ${result.bucket}`;
-    elements.activeSource.textContent = "Storage";
-    elements.activeSourceNote.textContent = "Сохранённые SAFE";
+        ? "SAFE в кэше не найдены"
+        : `${formatBytes(result.cache?.used_bytes)} из ${formatBytes(result.cache?.limit_bytes)}`;
+    elements.activeSource.textContent = "Сервер";
+    elements.activeSourceNote.textContent = "Локальные SAFE";
   } catch (error) {
     state.scenes = [];
     renderScenes({ reveal: false });
-    elements.requestState.textContent = "Ошибка Storage";
+    elements.requestState.textContent = "Ошибка SAFE-кэша";
     elements.requestState.className = "request-state error";
     showToast(error.message, true);
   } finally {
@@ -737,13 +753,13 @@ function setSearchLoading(isLoading, source = "") {
       : "Найти снимки";
   elements.storageButton.querySelector("span").textContent =
     isLoading && source === "storage"
-      ? "Чтение Storage…"
-      : "Проверить хранилище";
+      ? "Чтение SAFE-кэша…"
+      : "Файлы на сервере";
 
   if (isLoading) {
     elements.requestState.textContent =
       source === "storage"
-        ? "Проверка хранилища"
+        ? "Проверка файлов на сервере"
         : "Запрос выполняется";
     elements.requestState.className = "request-state loading";
   }
@@ -768,6 +784,9 @@ function renderScenes({ reveal = true } = {}) {
     // Результаты всё равно отображаются, даже если регион был удалён с карты.
   }
   elements.sceneRows.replaceChildren();
+  elements.backToTilesButton.hidden = !(
+    state.analysisMode === "desertification" && state.activeLandTile
+  );
   elements.sceneCount.textContent = String(state.scenes.length);
   elements.sceneCountNote.textContent =
     state.scenes.length === 0
@@ -790,6 +809,12 @@ function renderScenes({ reveal = true } = {}) {
   elements.latestScene.textContent = formatCompactDate(
     state.scenes[0].datetime,
   );
+
+  if (state.analysisMode === "desertification" && !state.activeLandTile) {
+    renderLandTileGroups(regionGeometry);
+    setSearchResultsVisibility(reveal);
+    return;
+  }
 
   state.scenes.forEach((scene, index) => {
     const row = document.createElement("tr");
@@ -860,6 +885,11 @@ function renderScenes({ reveal = true } = {}) {
     downloadButton.dataset.sceneIndex = String(index);
 
     let processButton = null;
+    const archiveButton = document.createElement("button");
+    archiveButton.type = "button";
+    archiveButton.className = "button secondary archive-safe-button";
+    archiveButton.textContent = "Выгрузить SAFE и удалить";
+    archiveButton.hidden = true;
     if (
       scene.collection === "sentinel-1-grd" ||
       (state.analysisMode === "desertification" &&
@@ -881,6 +911,7 @@ function renderScenes({ reveal = true } = {}) {
         scene,
         downloadButton,
         processButton,
+        archiveButton,
         downloadMeta,
       );
     });
@@ -890,47 +921,62 @@ function renderScenes({ reveal = true } = {}) {
       if (state.analysisMode === "desertification") {
         toggleLandScene(
           scene,
-          processButton.dataset.storageKey || "",
+          processButton.dataset.filename || "",
           processButton,
         );
       } else {
         selectSceneForProcessing(
           scene,
           processButton.dataset.filename || "",
-          processButton.dataset.storageKey || "",
+          "",
         );
       }
+    });
+    archiveButton.addEventListener("click", (buttonEvent) => {
+      buttonEvent.stopPropagation();
+      void startArchiveSafe(
+        scene,
+        archiveButton.dataset.filename || "",
+        downloadButton,
+        processButton,
+        archiveButton,
+        downloadMeta,
+      );
     });
 
     actionGroup.append(downloadButton);
     processButton && actionGroup.append(processButton);
+    actionGroup.append(archiveButton);
     downloadPanel.append(downloadMeta, actionGroup);
     actionCell.appendChild(downloadPanel);
     row.appendChild(actionCell);
 
     elements.sceneRows.appendChild(row);
-    if (scene.storage_exists) {
-      markSceneStored(
+    if (scene.local_exists) {
+      markSceneLocal(
         scene,
         downloadButton,
         processButton,
+        archiveButton,
         downloadMeta,
         {
-          filename:
-            scene.storage_key?.split("/").pop() || scene.name || "",
-          storageKey: scene.storage_key,
-          storageBucket: scene.storage_bucket,
+          filename: scene.local_filename || scene.name || "",
           sizeBytes:
-            scene.storage_size_bytes || scene.size_bytes || 0,
+            scene.local_size_bytes || scene.size_bytes || 0,
           reused: true,
         },
       );
     } else {
+      if (scene.storage_exists) {
+        downloadButton.textContent = "Получить на сервер";
+        downloadMeta.textContent = `Размер: ${formatBytes(scene.storage_size_bytes || scene.size_bytes)}`;
+      }
       sizeTasks.push({
         scene,
         downloadMeta,
         downloadButton,
         processButton,
+        archiveButton,
       });
     }
   });
@@ -939,6 +985,66 @@ function renderScenes({ reveal = true } = {}) {
   renderSceneOutlines();
   void loadDownloadSizes(sizeTasks, searchGeneration);
   setSearchResultsVisibility(reveal);
+}
+
+function renderLandTileGroups(regionGeometry) {
+  const groups = new Map();
+  for (const scene of state.scenes) {
+    const tile = sentinel2SceneTile(scene);
+    if (!tile) continue;
+    const group = groups.get(tile) || [];
+    group.push(scene);
+    groups.set(tile, group);
+  }
+  const ordered = [...groups.entries()].sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  elements.sceneCount.textContent = String(ordered.length);
+  elements.sceneCountNote.textContent = `${state.scenes.length} сцен сгруппированы по тайлам`;
+  elements.resultsSourceLabel.textContent = "Тайлы Sentinel-2";
+
+  for (const [tile, scenes] of ordered) {
+    scenes.sort((left, right) =>
+      String(right.datetime || "").localeCompare(String(left.datetime || "")),
+    );
+    const representative = scenes[0];
+    const dates = new Set(scenes.map(sentinel2SceneDate).filter(Boolean));
+    const platforms = new Set(scenes.map((scene) => formatPlatform(scene.platform)));
+    const row = document.createElement("tr");
+    row.className = "tile-group-row";
+    row.appendChild(scenePreviewCell(representative.geometry, regionGeometry));
+    row.appendChild(
+      cellWithNote(formatCompactDate(representative.datetime), "Последняя доступная дата"),
+    );
+    row.appendChild(cellWithNote(tile, `${dates.size} ${pluralDates(dates.size)}`));
+    row.appendChild(cellWithNote([...platforms].join(" / "), "Sentinel-2 L2A"));
+    row.appendChild(cellWithNote(`${scenes.length} сцен`, "Выберите тайл, затем дату"));
+    const actionCell = document.createElement("td");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "button download-button";
+    button.textContent = "Выбрать даты";
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void searchLandTileDates(representative);
+    });
+    actionCell.appendChild(button);
+    row.appendChild(actionCell);
+    row.addEventListener("click", () => void searchLandTileDates(representative));
+    elements.sceneRows.appendChild(row);
+  }
+  renderSceneOutlines();
+}
+
+function showLandTileGroups() {
+  state.landTileSearchController?.abort();
+  state.landTileSearchController = null;
+  state.activeLandTile = "";
+  state.scenes = state.landCatalogueScenes.slice();
+  state.selectedSceneIndex = -1;
+  elements.requestState.textContent = `${new Set(state.scenes.map(sentinel2SceneTile).filter(Boolean)).size} тайлов`;
+  elements.requestState.className = "request-state success";
+  renderScenes();
 }
 
 function scenePreviewCell(sceneGeometry, regionGeometry) {
@@ -1141,20 +1247,23 @@ async function loadDownloadSizes(tasks, searchGeneration) {
           ? `Размер: ${formatBytes(sizeBytes)}`
           : "Размер: нет данных";
         task.downloadMeta.title = info.filename || "";
-        if (info.storage_exists) {
-          markSceneStored(
+        if (info.local_exists) {
+          markSceneLocal(
             task.scene,
             task.downloadButton,
             task.processButton,
+            task.archiveButton,
             task.downloadMeta,
             {
               filename: info.filename,
-              storageKey: info.storage_key,
-              storageBucket: info.storage_bucket,
               sizeBytes,
               reused: true,
             },
           );
+        } else if (info.storage_exists) {
+          task.downloadButton.textContent = "Получить на сервер";
+          task.downloadButton.title = "SAFE находится в Object Storage";
+          task.downloadMeta.textContent = `Размер: ${formatBytes(sizeBytes)} · архив`;
         }
       } catch (error) {
         if (searchGeneration !== state.searchGeneration) return;
@@ -1168,44 +1277,46 @@ async function loadDownloadSizes(tasks, searchGeneration) {
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
 }
 
-function markSceneStored(
+function markSceneLocal(
   scene,
   downloadButton,
   processButton,
+  archiveButton,
   downloadMeta,
   {
     filename = "",
-    storageKey = "",
-    storageBucket = "",
     sizeBytes = 0,
     reused = false,
   } = {},
 ) {
-  scene.storageReady = true;
-  scene.storage_key = storageKey || scene.storage_key || "";
+  scene.localReady = true;
+  scene.local_exists = true;
+  scene.local_filename = filename;
   downloadButton.className = "button download-button completed";
-  downloadButton.textContent = "В Storage";
-  downloadButton.title = storageKey || filename;
+  downloadButton.textContent = "На сервере";
+  downloadButton.title = filename;
   downloadButton.disabled = true;
 
   if (Number(sizeBytes) > 0) {
     downloadMeta.textContent =
-      `Размер: ${formatBytes(sizeBytes)} · в Storage`;
+      `Размер: ${formatBytes(sizeBytes)} · локально`;
   }
-  downloadMeta.title = storageKey
-    ? `${storageBucket}/${storageKey}`
-    : filename;
+  downloadMeta.title = filename;
+  archiveButton.hidden = false;
+  archiveButton.disabled = !state.objectStorageConfigured;
+  archiveButton.title = state.objectStorageConfigured
+    ? "Выгрузить архив и освободить место на сервере"
+    : "Сначала настройте Object Storage";
+  archiveButton.dataset.filename = filename;
 
   if (
     scene.collection === "sentinel-1-grd" &&
     processButton &&
-    storageKey
+    filename
   ) {
     processButton.hidden = false;
-    processButton.disabled =
-      !state.snapAvailable || !state.objectStorageConfigured;
+    processButton.disabled = !state.snapAvailable;
     processButton.dataset.filename = filename || "";
-    processButton.dataset.storageKey = storageKey;
     processButton.textContent = "Обработать";
   }
 
@@ -1213,23 +1324,20 @@ function markSceneStored(
     state.analysisMode === "desertification" &&
     scene.collection === "sentinel-2-l2a" &&
     processButton &&
-    storageKey
+    filename
   ) {
     processButton.hidden = false;
-    processButton.disabled =
-      !state.objectStorageConfigured || !state.desertificationModelAvailable;
+    processButton.disabled = !state.desertificationModelAvailable;
     processButton.dataset.filename = filename || "";
-    processButton.dataset.storageKey = storageKey;
     processButton.textContent = "Добавить к обработке";
   }
 
   if (reused) {
     scene.downloadInfo = {
       ...(scene.downloadInfo || {}),
-      storage_exists: true,
-      storage_key: storageKey,
-      storage_bucket: storageBucket,
-      storage_size_bytes: sizeBytes,
+      local_exists: true,
+      local_filename: filename,
+      local_size_bytes: sizeBytes,
     };
   }
 }
@@ -1369,6 +1477,7 @@ async function startDownload(
   scene,
   button,
   processButton,
+  archiveButton,
   downloadMeta,
 ) {
   if (
@@ -1398,6 +1507,7 @@ async function startDownload(
       scene,
       button,
       processButton,
+      archiveButton,
       downloadMeta,
     );
   } catch (error) {
@@ -1410,6 +1520,7 @@ async function pollDownload(
   scene,
   button,
   processButton,
+  archiveButton,
   downloadMeta,
 ) {
   const startedAt = Date.now();
@@ -1429,18 +1540,17 @@ async function pollDownload(
     updateDownloadProgress(job, button, downloadMeta);
 
     if (job.status === "completed") {
-      if (job.storage_uploaded) {
-        markSceneStored(
+      if (job.local_ready) {
+        markSceneLocal(
           scene,
           button,
           processButton,
+          archiveButton,
           downloadMeta,
           {
             filename: job.filename,
-            storageKey: job.storage_key,
-            storageBucket: job.storage_bucket,
             sizeBytes: job.total_bytes,
-            reused: Boolean(job.storage_reused),
+            reused: Boolean(job.local_reused),
           },
         );
       } else {
@@ -1449,13 +1559,10 @@ async function pollDownload(
         button.title = job.filename || "";
         button.disabled = true;
       }
-      showToast(job.storage_reused
-        ? `SAFE уже находится в ${job.storage_bucket}/${job.storage_key}. ` +
-          "Он будет получен из Storage при обработке."
-        : job.storage_uploaded
-          ? `SAFE сохранён в ${job.storage_bucket}/${job.storage_key}. ` +
-            "Временная копия с ноутбука удалена."
-          : `SAFE сохранён локально в data/raw: ${job.filename}`);
+      showToast(job.local_reused
+        ? "SAFE уже находится в локальном кэше сервера."
+        : `SAFE готов к обработке на сервере: ${job.filename}`);
+      if (job.cache) updateSafeCacheStatus(job.cache);
       return;
     }
 
@@ -1505,22 +1612,86 @@ function updateDownloadProgress(
       ? "В очереди…"
       : job.phase === "storage"
         ? "Выгрузка в Storage…"
+      : job.phase === "storage-download"
+        ? "Получение из Storage…"
       : totalBytes > 0
         ? "Загрузка…"
         : "Загрузка…";
 }
 
-function toggleLandScene(scene, storageKey, button = null) {
+function updateSafeCacheStatus(cache) {
+  if (!cache) return;
+  state.safeCache = cache;
+  elements.storageStatus.textContent =
+    `SAFE на сервере: ${formatBytes(cache.used_bytes)} из ${formatBytes(cache.limit_bytes)}`;
+}
+
+async function startArchiveSafe(
+  scene,
+  filename,
+  downloadButton,
+  processButton,
+  archiveButton,
+  downloadMeta,
+) {
+  if (!filename) return;
+  archiveButton.disabled = true;
+  archiveButton.textContent = "Выгрузка…";
+  try {
+    const queued = await fetchJSON(apiUrl("/api/cache/archive"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename }),
+    });
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 6 * 60 * 60 * 1000) {
+      await delay(1000);
+      const job = await fetchJSON(
+        apiUrl(`/api/download/status?id=${encodeURIComponent(queued.job_id)}`),
+      );
+      archiveButton.textContent = job.phase === "storage"
+        ? "Выгрузка в Storage…"
+        : "В очереди…";
+      if (job.status === "completed") {
+        scene.local_exists = false;
+        scene.localReady = false;
+        scene.storage_exists = true;
+        scene.storage_key = job.storage_key || "";
+        state.selectedLandScenes = state.selectedLandScenes.filter(
+          (item) => item.local_filename !== filename,
+        );
+        updateLandSelection();
+        archiveButton.hidden = true;
+        processButton && (processButton.hidden = true);
+        downloadButton.disabled = false;
+        downloadButton.className = "button download-button";
+        downloadButton.textContent = "Получить на сервер";
+        downloadMeta.textContent = `Размер: ${formatBytes(job.total_bytes)} · архив`;
+        updateSafeCacheStatus(job.cache);
+        showToast("SAFE выгружен в Object Storage и удалён с сервера.");
+        return;
+      }
+      if (job.status === "failed") throw new Error(job.message || "Ошибка выгрузки SAFE.");
+    }
+    throw new Error("Превышено время ожидания выгрузки SAFE.");
+  } catch (error) {
+    archiveButton.disabled = false;
+    archiveButton.textContent = "Выгрузить SAFE и удалить";
+    showToast(error.message, true);
+  }
+}
+
+function toggleLandScene(scene, localFilename, button = null) {
   if (scene.collection !== "sentinel-2-l2a") {
     showToast("GeoIntellect принимает только Sentinel-2 L2A.", true);
     return;
   }
-  if (!storageKey) {
-    showToast("Сначала сохраните Sentinel-2 SAFE в Object Storage.", true);
+  if (!localFilename) {
+    showToast("Сначала загрузите Sentinel-2 SAFE на сервер.", true);
     return;
   }
   const existingIndex = state.selectedLandScenes.findIndex(
-    (item) => item.storage_key === storageKey,
+    (item) => item.local_filename === localFilename,
   );
   if (existingIndex >= 0) {
     state.selectedLandScenes.splice(existingIndex, 1);
@@ -1536,7 +1707,7 @@ function toggleLandScene(scene, storageKey, button = null) {
     }
     state.selectedLandScenes.push({
       ...scene,
-      storage_key: storageKey,
+      local_filename: localFilename,
     });
   }
   button?.classList.toggle("scene-series-selected", existingIndex < 0);
@@ -1557,6 +1728,7 @@ function sentinel2SceneTile(scene) {
       : `T${normalisedExplicit}`;
   }
   const identity = [scene.name, scene.stac_item_id, scene.storage_key]
+    .concat(scene.local_filename || "")
     .filter(Boolean)
     .join(" ")
     .toUpperCase();
@@ -1567,11 +1739,16 @@ function resetLandTileSearch() {
   state.landTileSearchController?.abort();
   state.landTileSearchController = null;
   state.activeLandTile = "";
+  if (elements.backToTilesButton) elements.backToTilesButton.hidden = true;
   state.landTileSearchGeneration += 1;
 }
 
 function sceneIsStored(scene) {
   return Boolean(
+    scene.local_exists ||
+    scene.localReady ||
+    scene.local_filename ||
+    scene.downloadInfo?.local_exists ||
     scene.storage_exists ||
     scene.storageReady ||
     scene.storage_key ||
@@ -1625,7 +1802,9 @@ async function searchLandTileDates(anchorScene) {
   state.landTileSearchController = controller;
   state.activeLandTile = tile;
   const generation = ++state.landTileSearchGeneration;
-  const previousScenes = state.scenes.slice();
+  const previousScenes = state.landCatalogueScenes.length
+    ? state.landCatalogueScenes.slice()
+    : state.scenes.slice();
 
   elements.resultsSourceLabel.textContent = `Тайл ${tile} · поиск других дат`;
   elements.requestState.textContent = `Ищем временной ряд ${tile}…`;
@@ -1753,7 +1932,7 @@ function updateLandSelection() {
     remove.setAttribute("aria-label", "Удалить сцену из серии");
     remove.addEventListener("click", () => {
       const index = state.selectedLandScenes.findIndex(
-        (item) => item.storage_key === scene.storage_key,
+        (item) => item.local_filename === scene.local_filename,
       );
       if (index >= 0) state.selectedLandScenes.splice(index, 1);
       updateLandSelection();
@@ -1766,7 +1945,6 @@ function updateLandSelection() {
   const coverage = landTemporalCoverage();
   const ready =
     coverage.qualifiedTiles.size > 0 &&
-    state.objectStorageConfigured &&
     state.desertificationModelAvailable &&
     !IS_STATIC_DEMO;
   elements.processLandButton.disabled = !ready;
@@ -1776,7 +1954,7 @@ function updateLandSelection() {
       ? `${coverage.best.tile || "Один тайл"}: ${coverage.best.count}/${coverage.required} дат`
       : ready
         ? "Можно запускать обработку"
-        : "Обработка недоступна: проверьте сервер и хранилище";
+        : "Обработка недоступна: проверьте GeoIntellect";
   elements.landProcessingState.className = ready
     ? "request-state success"
     : "request-state";
@@ -1787,7 +1965,7 @@ function syncLandSceneButtons() {
     ".process-scene-button",
   )) {
     const selected = state.selectedLandScenes.some(
-      (scene) => scene.storage_key === button.dataset.storageKey,
+      (scene) => scene.local_filename === button.dataset.filename,
     );
     button.classList.toggle("scene-series-selected", selected);
     button.textContent = selected ? "Выбрано" : "Добавить к обработке";
@@ -1845,7 +2023,7 @@ async function handleLandProcessing(event) {
       .filter((scene) => coverage.qualifiedTiles.has(sentinel2SceneTile(scene)))
       .map((scene) => ({
       collection: "sentinel-2-l2a",
-      storage_key: scene.storage_key,
+      local_filename: scene.local_filename,
       name: scene.name || scene.stac_item_id || "",
       datetime: scene.datetime || "",
       platform: scene.platform || "",
@@ -1856,7 +2034,7 @@ async function handleLandProcessing(event) {
   setLandProcessingLoading(true, "Задание поставлено в очередь");
   try {
     const result = await fetchJSON(
-      apiUrl("/api/desertification/process/storage"),
+      apiUrl("/api/desertification/process/local"),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1888,9 +2066,7 @@ async function pollLandProcessing(jobId) {
     elements.landProcessingState.textContent = job.message || "Обработка…";
     elements.landProcessingState.className = "request-state loading";
     const label = elements.processLandButton.querySelector("span");
-    label.textContent = job.phase === "storage-download"
-      ? `Получение SAFE — ${Math.round(Number(job.progress_percent) || 0)}%`
-      : job.phase === "extracting"
+    label.textContent = job.phase === "extracting"
         ? "Распаковка SAFE…"
         : job.phase === "model"
           ? "GeoIntellect выполняет модель…"
@@ -1901,7 +2077,7 @@ async function pollLandProcessing(jobId) {
     if (job.status === "completed") {
       renderLandProcessingResult(job.result || {});
       setLandProcessingLoading(false, "Готово");
-      showToast("Анализ опустынивания завершён; временные SAFE удалены.");
+      showToast("Анализ опустынивания завершён; SAFE оставлены на сервере.");
       return;
     }
     if (job.status === "failed") {
@@ -1935,26 +2111,27 @@ function renderLandProcessingResult(result) {
   elements.landDemoBanner.textContent =
     `Реальный результат GeoIntellect · ${Number(metrics.scene_count) || 0} Sentinel-2 SAFE`;
   elements.landDemoBanner.className = "demo-data-banner request-state success";
-  const years = series.map((item) => Number(item.year)).filter(Number.isFinite);
-  elements.landMetricPeriod.textContent = years.length
-    ? `${Math.min(...years)}–${Math.max(...years)}`
+  const dates = series.map((item) => String(item.date || item.year || "")).filter(Boolean);
+  elements.landMetricPeriod.textContent = dates.length
+    ? `${formatCompactDate(dates[0])}–${formatCompactDate(dates.at(-1))}`
     : "—";
   elements.landMetricZones.textContent = String(
     Number(metrics.problem_zone_count) || 0,
   );
   elements.landMetricStrong.textContent =
     `${formatArea(metrics.strong_desertification_area_km2)} км²`;
-  elements.landMetricPriority.textContent = formatDecimal(
-    metrics.maximum_priority_score,
-    1,
-  );
-  elements.summaryConcentration.textContent = formatDecimal(
-    metrics.maximum_priority_score,
-    1,
-  );
+  const priorityText = metrics.priority_score_valid
+    ? formatDecimal(metrics.maximum_priority_score, 1)
+    : "—";
+  elements.landMetricPriority.textContent = priorityText;
+  elements.summaryConcentration.textContent = priorityText;
   elements.summaryConcentrationNote.textContent =
-    `${Number(metrics.problem_zone_count) || 0} проблемных зон`;
-  elements.landTrendCaption.textContent = "Результат реальной обработки Sentinel-2";
+    metrics.priority_score_valid
+      ? `${Number(metrics.problem_zone_count) || 0} проблемных зон`
+      : "Нужны наблюдения за несколько лет";
+  elements.landTrendCaption.textContent = metrics.trend_available
+    ? "Динамика индексов проблемной зоны №1"
+    : "Наблюдения проблемной зоны №1 · для многолетнего тренда нужны разные годы";
   renderLandTrendChart(series);
   elements.landResult.hidden = false;
   elements.landResultWarning.textContent = result.warning || "";
@@ -1995,8 +2172,9 @@ function renderLandTrendChart(series) {
   const padding = 12;
   const minValue = -0.15;
   const maxValue = 0.35;
-  const x = (index) => padding +
-    (index * (width - padding * 2)) / Math.max(series.length - 1, 1);
+  const x = (index) => series.length === 1
+    ? width / 2
+    : padding + (index * (width - padding * 2)) / (series.length - 1);
   const y = (value) => padding +
     ((maxValue - Number(value)) * (height - padding * 2)) /
       (maxValue - minValue);
@@ -2020,6 +2198,17 @@ function renderLandTrendChart(series) {
     line.setAttribute("stroke-linecap", "round");
     line.setAttribute("stroke-linejoin", "round");
     svg.appendChild(line);
+    series.forEach((item, index) => {
+      const point = document.createElementNS(svgNamespace, "circle");
+      point.setAttribute("cx", String(x(index)));
+      point.setAttribute("cy", String(y(item[key])));
+      point.setAttribute("r", "4");
+      point.setAttribute("fill", color);
+      const title = document.createElementNS(svgNamespace, "title");
+      title.textContent = `${item.date || item.year}: ${key.toUpperCase()} ${formatDecimal(item[key], 3)}`;
+      point.appendChild(title);
+      svg.appendChild(point);
+    });
   }
   elements.landTrendChart.appendChild(svg);
 }
@@ -2039,19 +2228,19 @@ function selectSceneForProcessing(scene, filename, storageKey) {
     showToast("Модуль ледовой карты принимает только Sentinel-1 GRD.", true);
     return;
   }
-  if (!storageKey) {
-    showToast("Сначала скачайте SAFE в Object Storage.", true);
+  if (!filename) {
+    showToast("Сначала загрузите SAFE на сервер.", true);
     return;
   }
   state.selectedProcessingScene = scene;
   state.selectedProcessingFilename = filename;
-  state.selectedProcessingStorageKey = storageKey;
+  state.selectedProcessingStorageKey = "";
   resetDeleteSourceState();
   elements.selectedProduct.textContent =
     scene.name || scene.stac_item_id || filename;
   elements.selectedProduct.title = elements.selectedProduct.textContent;
   elements.selectedProductNote.textContent =
-    `${formatPlatform(scene.platform)} · SAFE в Storage: ${storageKey}`;
+    `${formatPlatform(scene.platform)} · SAFE в локальном кэше сервера`;
   elements.processingState.textContent = "Сцена готова";
   elements.processingState.className = "request-state success";
 
@@ -2076,35 +2265,23 @@ function showProcessingPanel({ scroll = true } = {}) {
 function updateProcessButtonState() {
   const ready = Boolean(
     state.snapAvailable &&
-      state.objectStorageConfigured &&
       state.selectedProcessingScene &&
       state.selectedProcessingScene.collection === "sentinel-1-grd" &&
-      state.selectedProcessingStorageKey,
+      state.selectedProcessingFilename,
   );
   elements.processButton.disabled = !ready;
   elements.processButton.querySelector("span").textContent = "Обработать";
 }
 
 function updateDeleteSourceButtonState() {
-  if (
-    state.completedProcessingMode === "ephemeral" ||
-    state.completedProcessingMode === "storage"
-  ) {
-    elements.deleteSourceButton.disabled = true;
-    elements.deleteSourceButton.textContent =
-      state.completedProcessingMode === "storage"
-        ? "SAFE хранится в Storage"
-        : "SAFE удалён автоматически";
-    return;
-  }
-
   const ready = Boolean(
     state.completedProcessingJobId &&
-      state.completedProcessingSourceFilename,
+      state.completedProcessingSourceFilename &&
+      state.objectStorageConfigured,
   );
   elements.deleteSourceButton.disabled = !ready;
   if (ready) {
-    elements.deleteSourceButton.textContent = "Удалить загруженный SAFE";
+    elements.deleteSourceButton.textContent = "Выгрузить SAFE и удалить";
   }
 }
 
@@ -2113,10 +2290,7 @@ function resetDeleteSourceState() {
   state.completedProcessingSourceFilename = "";
   state.completedProcessingMode = "";
   elements.deleteSourceButton.disabled = true;
-  elements.deleteSourceButton.textContent =
-    state.selectedProcessingStorageKey
-      ? "SAFE хранится в Storage"
-      : "Удалить загруженный SAFE";
+  elements.deleteSourceButton.textContent = "Выгрузить SAFE и удалить";
 }
 
 function clearProcessingSelection(note = "Сцена не выбрана") {
@@ -2143,8 +2317,8 @@ async function handleProcessing(event) {
     showToast("Выберите Sentinel-1 сцену из таблицы.", true);
     return;
   }
-  if (!state.selectedProcessingStorageKey) {
-    showToast("Сначала скачайте SAFE в Object Storage.", true);
+  if (!state.selectedProcessingFilename) {
+    showToast("Сначала загрузите SAFE на сервер.", true);
     return;
   }
 
@@ -2163,14 +2337,14 @@ async function handleProcessing(event) {
     threshold_db: Number(elements.processingThreshold.value),
     uncertainty_db: Number(elements.processingUncertainty.value),
     pixel_spacing_m: Number(elements.processingPixelSize.value),
-    storage_key: state.selectedProcessingStorageKey,
+    filename: state.selectedProcessingFilename,
   };
 
   resetDeleteSourceState();
   setProcessingLoading(true, "Обработка поставлена в очередь");
 
   try {
-    const result = await fetchJSON(apiUrl("/api/process/storage"), {
+    const result = await fetchJSON(apiUrl("/api/process"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -2206,31 +2380,15 @@ async function pollProcessing(jobId) {
     if (job.status === "completed") {
       forgetProcessingJob();
       state.completedProcessingMode = job.processing_mode || "persistent";
-      state.completedProcessingJobId =
-        state.completedProcessingMode === "persistent" ? jobId : "";
+      state.completedProcessingJobId = jobId;
       state.completedProcessingSourceFilename =
         job.source_filename || state.selectedProcessingFilename;
       renderProcessingResult(job.result);
       setProcessingLoading(false, "Готово");
       elements.processingState.className = "request-state success";
-      if (state.completedProcessingMode === "storage") {
-        elements.selectedProductNote.textContent =
-          "Обработка завершена; исходный SAFE сохранён в Object Storage.";
-        showToast(job.result?.storage?.uploaded
-          ? "Ледовая карта и исходный SAFE сохранены в Object Storage."
-          : "Ледовая карта построена. Исходный SAFE сохранён в Object Storage.");
-      } else if (state.completedProcessingMode === "ephemeral") {
-        elements.selectedProductNote.textContent =
-          "Обработка завершена; временный исходный SAFE удалён с сервера.";
-        const storage = job.result?.storage;
-        showToast(storage?.uploaded
-          ? "Ледовая карта сохранена в Object Storage. Временный SAFE удалён."
-          : "Ледовая карта построена. Временный SAFE удалён автоматически.");
-      } else {
-        showToast(job.result?.storage?.uploaded
-          ? "Ледовая карта сохранена в Object Storage."
-          : "Ледовая карта построена и добавлена на карту.");
-      }
+      elements.selectedProductNote.textContent =
+        "Обработка завершена; исходный SAFE оставлен на сервере.";
+      showToast("Ледовая карта построена. SAFE можно выгрузить отдельной кнопкой.");
       return;
     }
 
@@ -2333,39 +2491,48 @@ async function handleDeleteDownloadedProduct() {
 
   const filename = state.completedProcessingSourceFilename;
   const confirmed = window.confirm(
-    `Удалить исходный файл ${filename} из data/raw? ` +
-      "Ледовая карта и файлы результатов будут сохранены.",
+    `Выгрузить ${filename} в Object Storage и удалить локальную копию? ` +
+      "Файл будет удалён только после проверки полного размера архива.",
   );
   if (!confirmed) return;
 
   elements.deleteSourceButton.disabled = true;
-  elements.deleteSourceButton.textContent = "Удаление…";
+  elements.deleteSourceButton.textContent = "Выгрузка…";
 
   try {
-    const result = await fetchJSON(apiUrl("/api/download/delete"), {
+    const queued = await fetchJSON(apiUrl("/api/cache/archive"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        job_id: state.completedProcessingJobId,
-      }),
+      body: JSON.stringify({ filename }),
     });
+    let result = null;
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 6 * 60 * 60 * 1000) {
+      await delay(1000);
+      result = await fetchJSON(
+        apiUrl(`/api/download/status?id=${encodeURIComponent(queued.job_id)}`),
+      );
+      if (result.status === "completed") break;
+      if (result.status === "failed") throw new Error(result.message || "Ошибка выгрузки SAFE.");
+    }
+    if (!result || result.status !== "completed") {
+      throw new Error("Превышено время ожидания выгрузки SAFE.");
+    }
 
-    markDownloadedProductDeleted(result.filename || filename);
+    markDownloadedProductDeleted(filename);
+    updateSafeCacheStatus(result.cache);
     resetDeleteSourceState();
     clearProcessingSelection(
-      `Исходный SAFE удалён. Освобождено ${formatBytes(result.freed_bytes)}; ` +
-        "результаты обработки сохранены.",
+      "Исходный SAFE выгружен в Object Storage и удалён с сервера; результаты сохранены.",
     );
-    elements.selectedProduct.textContent = "Исходный SAFE удалён";
-    elements.deleteSourceButton.textContent = "Файл удалён";
-    elements.processingState.textContent = "Готово · исходный SAFE удалён";
+    elements.selectedProduct.textContent = "SAFE выгружен";
+    elements.deleteSourceButton.textContent = "SAFE выгружен и удалён";
+    elements.processingState.textContent = "Готово · SAFE выгружен";
     elements.processingState.className = "request-state success";
-    showToast(
-      `Удалён ${result.filename}; освобождено ${formatBytes(result.freed_bytes)}.`,
-    );
+    showToast(`SAFE ${filename} выгружен и удалён с сервера.`);
   } catch (error) {
     elements.deleteSourceButton.disabled = false;
-    elements.deleteSourceButton.textContent = "Повторить удаление";
+    elements.deleteSourceButton.textContent = "Повторить выгрузку";
     showToast(error.message, true);
   }
 }
@@ -2462,28 +2629,37 @@ function addResultOverlay(record, { fit = false, persist = false } = {}) {
     fit && state.map.fitBounds(bounds, { padding: [32, 32] });
     return;
   }
+  if (state.pendingResultOverlays.has(imageUrl)) return;
 
   const separator = imageUrl.includes("?") ? "&" : "?";
-  const layer = L.imageOverlay(
-    `${backendUrl(imageUrl)}${separator}v=${Date.now()}`,
-    bounds,
-    {
+  const resolvedUrl = `${backendUrl(imageUrl)}${separator}v=${Date.now()}`;
+  state.pendingResultOverlays.add(imageUrl);
+  const probe = new Image();
+  probe.onload = () => {
+    state.pendingResultOverlays.delete(imageUrl);
+    const layer = L.imageOverlay(resolvedUrl, bounds, {
       opacity: Number(elements.overlayOpacity.value),
       interactive: false,
       zIndex: 450 + state.resultLayers.length,
-    },
-  ).addTo(state.map);
-
-  state.resultLayers.push({ imageUrl, bounds, layer });
-  if (persist) {
-    state.resultOverlayRecords.push({
-      image_url: imageUrl,
-      bounds,
-    });
+    }).addTo(state.map);
+    state.resultLayers.push({ imageUrl, bounds, layer });
+    if (persist && !state.resultOverlayRecords.some((item) => item.image_url === imageUrl)) {
+      state.resultOverlayRecords.push({ image_url: imageUrl, bounds });
+      persistResultOverlays();
+    }
+    updateResultMapControls();
+    fit && state.map.fitBounds(bounds, { padding: [32, 32] });
+  };
+  probe.onerror = () => {
+    state.pendingResultOverlays.delete(imageUrl);
+    state.resultOverlayRecords = state.resultOverlayRecords.filter(
+      (item) => item.image_url !== imageUrl,
+    );
     persistResultOverlays();
-  }
-  updateResultMapControls();
-  fit && state.map.fitBounds(bounds, { padding: [32, 32] });
+    updateResultMapControls();
+    if (persist) showToast("Растровый слой результата недоступен и не был добавлен на карту.", true);
+  };
+  probe.src = resolvedUrl;
 }
 
 function updateOverlayOpacity() {

@@ -1389,7 +1389,18 @@ tbody tr:hover {
 .scene-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 7px;
+}
+
+.archive-safe-button {
+  min-width: 100%;
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.tile-group-row {
+  cursor: pointer;
 }
 
 .process-scene-button {
