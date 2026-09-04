@@ -933,6 +933,63 @@ input:disabled {
   filter: var(--map-filter);
 }
 
+.scene-timeline {
+  flex: 0 0 auto;
+  padding: 12px 18px 10px;
+  border-top: 3px solid var(--accent-soft);
+  background: var(--surface);
+}
+
+.scene-timeline[hidden] {
+  display: none;
+}
+
+.scene-timeline-header,
+.scene-timeline-boundaries {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.scene-timeline-header {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.scene-timeline-header > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.scene-timeline-label {
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.scene-timeline-current,
+#sceneTimelineCurrent {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.scene-timeline input[type="range"] {
+  width: 100%;
+  height: auto;
+  margin: 8px 0 5px;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.scene-timeline-boundaries {
+  color: var(--muted);
+  font-size: 9px;
+}
+
 .map-attribution-note {
   display: flex;
   flex: 0 0 auto;

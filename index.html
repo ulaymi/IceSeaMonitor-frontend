@@ -39,7 +39,7 @@
       rel="stylesheet"
       href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css"
     />
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=0.3.3" />
   </head>
 
   <body>
@@ -267,6 +267,29 @@
         </div>
 
         <div id="map" aria-label="Карта области наблюдения"></div>
+
+        <div class="scene-timeline" id="sceneTimeline" hidden>
+          <div class="scene-timeline-header">
+            <div>
+              <span class="scene-timeline-label">Загруженные снимки Sentinel-2</span>
+              <strong id="sceneTimelineCurrent">—</strong>
+            </div>
+            <span id="sceneTimelinePosition">0 из 0</span>
+          </div>
+          <input
+            id="sceneTimelineRange"
+            type="range"
+            min="0"
+            max="0"
+            step="1"
+            value="0"
+            aria-label="Выбор загруженного снимка по дате"
+          />
+          <div class="scene-timeline-boundaries">
+            <span id="sceneTimelineStart">—</span>
+            <span id="sceneTimelineEnd">—</span>
+          </div>
+        </div>
 
         <div class="map-attribution-note">
           <span>WGS 84 · EPSG:4326</span>
@@ -611,7 +634,7 @@
               </label>
               <label class="field">
                 <span>Минимальное число наблюдений</span>
-                <input id="landMinObservations" type="number" value="6" min="3" max="60" step="1" />
+                <input id="landMinObservations" type="number" value="3" min="2" max="60" step="1" />
               </label>
             </div>
             <button class="button primary search-button" id="processLandButton" type="submit" disabled>
@@ -680,6 +703,6 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
-    <script src="app.js?v=0.3.2"></script>
+    <script src="app.js?v=0.3.3"></script>
   </body>
 </html>

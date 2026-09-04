@@ -41,6 +41,8 @@ const state = {
   landTileSearchController: null,
   safeCache: null,
   safeCacheMode: "",
+  timelineScenes: [],
+  timelineRequestGeneration: 0,
 };
 
 const elements = {};
@@ -58,6 +60,7 @@ async function initialise() {
   initialiseLandDemoDashboard();
 
   await Promise.all([loadDefaultRegion(), loadServerConfig()]);
+  await loadCachedSceneTimeline();
   restoreResultOverlays();
   resumeProcessingJob();
 }
@@ -139,6 +142,12 @@ function cacheElements() {
     "downloadMetadata",
     "downloadSnapLog",
     "clearMapResultsButton",
+    "sceneTimeline",
+    "sceneTimelineCurrent",
+    "sceneTimelinePosition",
+    "sceneTimelineRange",
+    "sceneTimelineStart",
+    "sceneTimelineEnd",
     "landProcessingPanel",
     "landProcessingForm",
     "landProcessingState",
@@ -386,6 +395,123 @@ function bindEvents() {
     handleLandProcessing,
   );
   elements.landMinObservations.addEventListener("input", updateLandSelection);
+  elements.sceneTimelineRange.addEventListener("input", () => {
+    void showTimelineScene(Number(elements.sceneTimelineRange.value));
+  });
+}
+
+function timelineSceneKey(scene) {
+  return String(scene.local_filename || scene.name || scene.stac_item_id || "");
+}
+
+function timelineSceneTimestamp(scene) {
+  const timestamp = new Date(scene.datetime || sentinel2SceneDate(scene)).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function registerTimelineScene(scene) {
+  if (
+    state.analysisMode !== "desertification" ||
+    scene.collection !== "sentinel-2-l2a" ||
+    !scene.local_exists ||
+    !scene.local_filename
+  ) return;
+  const key = timelineSceneKey(scene);
+  const existing = state.timelineScenes.findIndex(
+    (item) => timelineSceneKey(item) === key,
+  );
+  if (existing >= 0) state.timelineScenes[existing] = { ...state.timelineScenes[existing], ...scene };
+  else state.timelineScenes.push({ ...scene });
+  state.timelineScenes.sort((left, right) =>
+    timelineSceneTimestamp(left) - timelineSceneTimestamp(right) ||
+    timelineSceneKey(left).localeCompare(timelineSceneKey(right)));
+  updateSceneTimeline();
+}
+
+function removeTimelineScene(filename) {
+  state.timelineScenes = state.timelineScenes.filter(
+    (scene) => scene.local_filename !== filename,
+  );
+  updateSceneTimeline();
+}
+
+async function loadCachedSceneTimeline() {
+  if (IS_STATIC_DEMO || state.analysisMode !== "desertification") return;
+  try {
+    const result = await fetchJSON(apiUrl("/api/cache/scenes"));
+    state.timelineScenes = (result.scenes || [])
+      .filter((scene) => scene.collection === "sentinel-2-l2a" && scene.local_exists)
+      .sort((left, right) =>
+        timelineSceneTimestamp(left) - timelineSceneTimestamp(right) ||
+        timelineSceneKey(left).localeCompare(timelineSceneKey(right)));
+    updateSceneTimeline();
+    if (state.timelineScenes.length) {
+      const latestIndex = state.timelineScenes.length - 1;
+      elements.sceneTimelineRange.value = String(latestIndex);
+      await showTimelineScene(latestIndex);
+    }
+  } catch (error) {
+    elements.sceneTimeline.hidden = true;
+  }
+}
+
+function updateSceneTimeline() {
+  const scenes = state.timelineScenes;
+  elements.sceneTimeline.hidden = scenes.length === 0;
+  if (!scenes.length) {
+    clearOpticalScene();
+    return;
+  }
+  const range = elements.sceneTimelineRange;
+  range.min = "0";
+  range.max = String(Math.max(0, scenes.length - 1));
+  const current = Math.min(Number(range.value) || 0, scenes.length - 1);
+  range.value = String(current);
+  elements.sceneTimelineStart.textContent = formatCompactDate(scenes[0].datetime);
+  elements.sceneTimelineEnd.textContent = formatCompactDate(scenes.at(-1).datetime);
+  updateSceneTimelineLabel(current);
+}
+
+function updateSceneTimelineLabel(index) {
+  const scene = state.timelineScenes[index];
+  if (!scene) return;
+  elements.sceneTimelineCurrent.textContent = [
+    formatCompactDate(scene.datetime),
+    sentinel2SceneTile(scene),
+    formatPlatform(scene.platform),
+  ].filter(Boolean).join(" · ");
+  elements.sceneTimelinePosition.textContent = `${index + 1} из ${state.timelineScenes.length}`;
+}
+
+async function showTimelineScene(index) {
+  const scene = state.timelineScenes[index];
+  if (!scene) return;
+  elements.sceneTimelineRange.value = String(index);
+  updateSceneTimelineLabel(index);
+  elements.sceneTimelineCurrent.textContent += " · подготовка…";
+  const generation = ++state.timelineRequestGeneration;
+  try {
+    const preview = await fetchJSON(apiUrl("/api/cache/preview"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: scene.local_filename }),
+    });
+    if (generation !== state.timelineRequestGeneration) return;
+    clearOpticalScene();
+    state.opticalLayer = L.imageOverlay(
+      apiUrl(preview.image_url),
+      preview.bounds,
+      { pane: "opticalPreviewPane", opacity: 0.9, interactive: false },
+    ).addTo(state.map);
+    const bounds = L.latLngBounds(preview.bounds);
+    if (bounds.isValid()) state.map.fitBounds(bounds, { padding: [24, 24] });
+    updateSceneTimelineLabel(index);
+  } catch (error) {
+    if (generation !== state.timelineRequestGeneration) return;
+    updateSceneTimelineLabel(index);
+    elements.sceneTimelineCurrent.textContent += " · предпросмотр недоступен";
+    showToast(error.message, true);
+  }
 }
 
 function regionStyle() {
@@ -1303,6 +1429,7 @@ function markSceneLocal(
   scene.localReady = true;
   scene.local_exists = true;
   scene.local_filename = filename;
+  registerTimelineScene(scene);
   downloadButton.className = "button download-button completed";
   downloadButton.textContent = "На сервере";
   downloadButton.title = filename;
@@ -1756,6 +1883,7 @@ async function startArchiveSafe(
           (item) => item.local_filename !== filename,
         );
         updateLandSelection();
+        removeTimelineScene(filename);
         archiveButton.hidden = true;
         processButton && (processButton.hidden = true);
         downloadButton.disabled = false;
@@ -1991,8 +2119,8 @@ function sentinel2SceneDate(scene) {
 
 function landTemporalCoverage() {
   const required = Math.max(
-    3,
-    Math.min(60, Math.round(Number(elements.landMinObservations.value) || 6)),
+    2,
+    Math.min(60, Math.round(Number(elements.landMinObservations.value) || 3)),
   );
   const groups = new Map();
   for (const scene of state.selectedLandScenes) {
@@ -2214,8 +2342,11 @@ function renderLandProcessingResult(result) {
   const metrics = result.metrics || {};
   const series = Array.isArray(metrics.timeseries) ? metrics.timeseries : [];
   elements.landDemoBanner.textContent =
-    `Реальный результат GeoIntellect · ${Number(metrics.scene_count) || 0} Sentinel-2 SAFE`;
-  elements.landDemoBanner.className = "demo-data-banner request-state success";
+    `Реальный результат GeoIntellect · ${Number(metrics.scene_count) || 0} Sentinel-2 SAFE` +
+    (metrics.statistics_provisional ? " · предварительная статистика" : "");
+  elements.landDemoBanner.className = metrics.statistics_provisional
+    ? "demo-data-banner request-state loading"
+    : "demo-data-banner request-state success";
   const dates = series.map((item) => String(item.date || item.year || "")).filter(Boolean);
   elements.landMetricPeriod.textContent = dates.length
     ? `${formatCompactDate(dates[0])}–${formatCompactDate(dates.at(-1))}`
@@ -2225,15 +2356,16 @@ function renderLandProcessingResult(result) {
   );
   elements.landMetricStrong.textContent =
     `${formatArea(metrics.strong_desertification_area_km2)} км²`;
-  const priorityText = metrics.priority_score_valid
+  const priorityText = metrics.priority_score_available
     ? formatDecimal(metrics.maximum_priority_score, 1)
     : "—";
   elements.landMetricPriority.textContent = priorityText;
   elements.summaryConcentration.textContent = priorityText;
   elements.summaryConcentrationNote.textContent =
-    metrics.priority_score_valid
-      ? `${Number(metrics.problem_zone_count) || 0} проблемных зон`
-      : "Нужны наблюдения за несколько лет";
+    metrics.priority_score_available
+      ? `${Number(metrics.problem_zone_count) || 0} проблемных зон` +
+        (metrics.temporal_validation_passed ? "" : " · предварительно")
+      : "Проблемные зоны не выделены";
   elements.landTrendCaption.textContent = metrics.trend_available
     ? "Динамика индексов проблемной зоны №1"
     : "Наблюдения проблемной зоны №1 · для многолетнего тренда нужны разные годы";
