@@ -40,6 +40,7 @@ const state = {
   landTileSearchGeneration: 0,
   landTileSearchController: null,
   safeCache: null,
+  safeCacheMode: "",
 };
 
 const elements = {};
@@ -455,6 +456,7 @@ async function loadServerConfig() {
       config.desertification_model_available,
     );
     state.safeCache = config.safe_cache || null;
+    state.safeCacheMode = String(config.safe_cache_mode || "");
     elements.credentialStatus.textContent = state.credentialsConfigured
       ? "CDSE: загрузка настроена"
       : "CDSE: добавьте данные в .env";
@@ -467,7 +469,9 @@ async function loadServerConfig() {
         : "SNAP: задайте путь в .env";
     elements.storageStatus.textContent = state.safeCache
       ? `SAFE на сервере: ${formatBytes(state.safeCache.used_bytes)} из ${formatBytes(state.safeCache.limit_bytes)}`
-      : "SAFE-кэш: проверка недоступна";
+      : state.analysisMode === "desertification"
+        ? "Backend: требуется перезапуск"
+        : "SAFE-кэш: проверка недоступна";
     elements.storageStatus.title = state.objectStorageConfigured
       ? `Архив: ${config.object_storage_bucket}`
       : "Object Storage не настроен";
@@ -1481,6 +1485,17 @@ async function startDownload(
   downloadMeta,
 ) {
   if (
+    state.analysisMode === "desertification" &&
+    state.safeCacheMode !== "local-first-v1"
+  ) {
+    showToast(
+      "Запущена предыдущая версия backend. Перезапустите NatObserve, чтобы SAFE сохранялся на сервере и стал доступен для обработки.",
+      true,
+    );
+    return;
+  }
+
+  if (
     !state.credentialsConfigured &&
     !state.objectStorageConfigured
   ) {
@@ -1554,14 +1569,20 @@ async function pollDownload(
           },
         );
       } else {
-        button.className = "button download-button completed";
-        button.textContent = "Скачано";
-        button.title = job.filename || "";
-        button.disabled = true;
+        await reconcileCompletedDownload(
+          scene,
+          job,
+          button,
+          processButton,
+          archiveButton,
+          downloadMeta,
+        );
       }
-      showToast(job.local_reused
-        ? "SAFE уже находится в локальном кэше сервера."
-        : `SAFE готов к обработке на сервере: ${job.filename}`);
+      if (job.local_ready) {
+        showToast(job.local_reused
+          ? "SAFE уже находится в локальном кэше сервера."
+          : `SAFE готов к обработке на сервере: ${job.filename}`);
+      }
       if (job.cache) updateSafeCacheStatus(job.cache);
       return;
     }
@@ -1580,6 +1601,73 @@ async function pollDownload(
   setDownloadFailed(
     button,
     "Превышено время ожидания статуса загрузки.",
+  );
+}
+
+async function reconcileCompletedDownload(
+  scene,
+  job,
+  button,
+  processButton,
+  archiveButton,
+  downloadMeta,
+) {
+  scene.storage_exists = Boolean(job.storage_uploaded || job.storage_reused);
+  scene.storage_key = job.storage_key || scene.storage_key || "";
+
+  try {
+    const info = await fetchJSON(apiUrl("/api/download/info"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scene }),
+    });
+    scene.downloadInfo = info;
+
+    if (info.local_exists) {
+      markSceneLocal(
+        scene,
+        button,
+        processButton,
+        archiveButton,
+        downloadMeta,
+        {
+          filename: info.local_filename || info.filename,
+          sizeBytes: info.local_size_bytes || info.size_bytes,
+          reused: true,
+        },
+      );
+      showToast("SAFE найден в локальном кэше и доступен для обработки.");
+      return;
+    }
+
+    if (info.storage_exists || scene.storage_exists) {
+      scene.storage_exists = true;
+      scene.storage_key = info.storage_key || scene.storage_key;
+      button.className = "button download-button";
+      button.textContent = state.safeCacheMode === "local-first-v1"
+        ? "Получить на сервер"
+        : "Нужен перезапуск";
+      button.title = state.safeCacheMode === "local-first-v1"
+        ? "SAFE находится в Object Storage — получить в локальный кэш"
+        : "Перезапустите backend для включения локального SAFE-кэша";
+      button.disabled = state.safeCacheMode !== "local-first-v1";
+      downloadMeta.textContent =
+        `Размер: ${formatBytes(info.storage_size_bytes || info.size_bytes || job.total_bytes)} · архив`;
+      showToast(
+        state.safeCacheMode === "local-first-v1"
+          ? "SAFE сохранён в архиве. Нажмите «Получить на сервер», затем добавьте сцену к обработке."
+          : "SAFE сохранён в архиве, но запущена предыдущая версия backend. Перезапустите NatObserve.",
+        state.safeCacheMode !== "local-first-v1",
+      );
+      return;
+    }
+  } catch (error) {
+    button.title = error.message;
+  }
+
+  setDownloadFailed(
+    button,
+    "Передача завершилась, но SAFE не найден ни на сервере, ни в Object Storage.",
   );
 }
 
