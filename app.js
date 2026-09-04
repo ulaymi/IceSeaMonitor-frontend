@@ -1028,13 +1028,20 @@ function renderLandTileGroups(regionGeometry) {
     button.type = "button";
     button.className = "button download-button";
     button.textContent = "Выбрать даты";
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      void searchLandTileDates(representative);
-    });
+    const chooseDates = async (event) => {
+      event?.stopPropagation();
+      button.disabled = true;
+      button.textContent = "Поиск дат…";
+      const opened = await searchLandTileDates(representative);
+      if (!opened && button.isConnected) {
+        button.disabled = false;
+        button.textContent = "Выбрать даты";
+      }
+    };
+    button.addEventListener("click", chooseDates);
     actionCell.appendChild(button);
     row.appendChild(actionCell);
-    row.addEventListener("click", () => void searchLandTileDates(representative));
+    row.addEventListener("click", chooseDates);
     elements.sceneRows.appendChild(row);
   }
   renderSceneOutlines();
@@ -1881,9 +1888,16 @@ function tileScenesByDistinctDate(tile, anchorScene, candidates) {
 }
 
 async function searchLandTileDates(anchorScene) {
-  if (IS_STATIC_DEMO) return;
+  if (IS_STATIC_DEMO) {
+    showToast("Для поиска дат тайла подключите backend-сервер.", true);
+    return false;
+  }
   const tile = sentinel2SceneTile(anchorScene);
-  if (!tile || state.activeLandTile === tile) return;
+  if (!tile) {
+    showToast("Не удалось определить номер тайла Sentinel-2.", true);
+    return false;
+  }
+  if (state.activeLandTile === tile) return true;
 
   state.landTileSearchController?.abort();
   const controller = new AbortController();
@@ -1902,9 +1916,10 @@ async function searchLandTileDates(anchorScene) {
   if (!geometry) {
     try {
       geometry = geometryFromMap();
-    } catch {
+    } catch (error) {
       state.activeLandTile = "";
-      return;
+      showToast(error.message, true);
+      return false;
     }
   }
 
@@ -1944,14 +1959,16 @@ async function searchLandTileDates(anchorScene) {
         true,
       );
     }
+    return true;
   } catch (error) {
-    if (error.name === "AbortError") return;
-    if (generation !== state.landTileSearchGeneration) return;
+    if (error.name === "AbortError") return false;
+    if (generation !== state.landTileSearchGeneration) return false;
     state.activeLandTile = "";
     elements.resultsSourceLabel.textContent = "Каталог Copernicus";
     elements.requestState.textContent = "Не удалось найти другие даты";
     elements.requestState.className = "request-state error";
     showToast(error.message, true);
+    return false;
   } finally {
     if (generation === state.landTileSearchGeneration) {
       state.landTileSearchController = null;
