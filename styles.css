@@ -1875,9 +1875,11 @@ tbody tr:hover {
 }
 
 .land-processing-panel {
+  margin-top: 0;
   grid-column: 1 / -1;
   order: 5;
   overflow: hidden;
+  border-radius: 20px;
 }
 
 .land-processing-layout {
@@ -2010,6 +2012,16 @@ tbody tr:hover {
   font-size: 21px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+#landMetricPeriod {
+  min-height: 44px;
+  overflow: visible;
+  font-size: 18px;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .land-trend-card {
